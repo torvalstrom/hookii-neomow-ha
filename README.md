@@ -14,10 +14,12 @@ buttons, camera) via MQTT Discovery. This repo adds the **map**:
   `ALL_PATH_LIST_V2`, `ALL_PATH_INDEX_V2`, `STATUS`, `REGION_TASK`) and serves
   the geometry to the card over Home Assistant's authenticated websocket. It
   runs inside HA Core, so it needs no Supervisor and works on container installs.
-- **`card/hookii-mower-map-card.js`** — a dependency-free Lovelace card that
-  renders the yard boundary, cut/transit coverage, live trail and the mower's
-  position + heading entirely client-side. No framework import, so it does not
-  break when Home Assistant bumps its frontend.
+- **`custom_components/hookii_neomow/frontend/hookii-mower-map-card.js`** — a
+  dependency-free Lovelace card that renders the yard boundary, cut/transit
+  coverage, live trail and the mower's position + heading entirely client-side.
+  It ships **inside** the integration (served + auto-registered on setup), so
+  there is no second thing to install. No framework import, so it does not break
+  when Home Assistant bumps its frontend.
 
 ## Why this exists
 
@@ -57,3 +59,48 @@ Lovelace resource to add by hand.
 
 Updates flow through that single HACS item. (Default-store inclusion — so it's
 findable by search without the custom-repo step — is pending a `home-assistant/brands` PR.)
+
+## Card options
+
+| Option | Default | Description |
+|---|---|---|
+| `mower` | first configured | The mower **label** to show (from the integration config). Optional if you only configured one mower. |
+| `rotate` | `0` | Degrees counter-clockwise. Set to `90`/`180`/`270` so the map matches the orientation you see in the Hookii app. |
+| `title` | — | Optional card header. |
+| `aspect_ratio` | `1.4` | Width-to-height ratio of the map area. |
+
+Add one card per mower. Example for a multi-mower setup:
+
+```yaml
+type: custom:hookii-mower-map-card
+mower: greenhouse
+title: Greenhouse
+rotate: 90
+```
+
+## What the map shows
+
+- **Yard boundary** (translucent green) once the cloud has streamed `DEVICE_MAP_V2`
+  (can take minutes to hours after a mower first comes online), plus any
+  **exclusion zones** (dark).
+- **Coverage**: thick green where the mower **cut**, thin light-green for
+  **transit** (moving without cutting).
+- The **live trail** in the mower's colour and the **robot** itself with a
+  heading arrow.
+- A **docked or offline mower** still shows its yard + coverage — just without
+  the live robot marker (so the map is useful even when the mower is parked).
+
+The boundary + path captures are persisted, so an HA restart does not blank the
+map while it waits for the next cloud stream.
+
+## Troubleshooting
+
+- **"Custom element doesn't exist: hookii-mower-map-card"** — fully close and
+  reopen the app (or hard-refresh the browser) after installing/updating, so the
+  bundled card is fetched.
+- **Map says "Waiting for map data…"** — the bridge isn't publishing yet, or the
+  topic prefix / mower serial don't match what the bridge uses. Check the bridge
+  is running and that the MQTT integration is connected.
+- **Map looks rotated wrong** — set `rotate` on the card to `90`, `180` or `270`.
+- **Migrating from the old iframe map** (`neomow.cscloud.dk` / the bridge's
+  Ingress page) — replace those `iframe`/`picture` cards with this card.
