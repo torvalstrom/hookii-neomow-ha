@@ -21,6 +21,44 @@ buttons, camera) via MQTT Discovery. This repo adds the **map**:
   there is no second thing to install. No framework import, so it does not break
   when Home Assistant bumps its frontend.
 
+## Quick start (step by step)
+
+**Before you start** you need two things already working: the
+[**Hookii Bridge**](https://github.com/torvalstrom/hookii-bridge-ha-addon)
+(add-on on HAOS, or a container on Docker/Compose/k3s) publishing to your MQTT
+broker, and Home Assistant's **MQTT integration** connected to that broker. The
+bridge auto-creates your mower entities; this repo adds the map.
+
+1. **Install HACS** if you don't have it yet — https://hacs.xyz (one-time, works
+   on every HA install type).
+2. **Add this repository to HACS:** HACS → ⋮ (top-right) → **Custom repositories**
+   → paste `https://github.com/torvalstrom/hookii-neomow-ha`, category
+   **Integration** → **Add**.
+3. **Download:** open the new *Hookii Neomow Map* entry → **Download** →
+   **Restart Home Assistant** when prompted.
+4. **Add the integration:** Settings → Devices & Services → **Add Integration**
+   → search **Hookii Neomow Map** → enter the MQTT topic prefix (default
+   `hookii/details/device`) and your mowers as `label:serial[:color]` separated
+   by `;` — e.g. `garden:HKX1EB100JD25010115:#22c55e;pond:HKX2EB100JD24080170`.
+5. **Add the card to a dashboard:** edit any dashboard → **Add card** → search
+   **Hookii Neomow Map** (or paste the YAML below). The card ships **inside** the
+   integration and is already registered — there is no second HACS item and no
+   Lovelace resource to add by hand.
+
+   ```yaml
+   type: custom:hookii-mower-map-card
+   mower: garden     # the label you configured (optional if only one mower)
+   rotate: 0         # 90/180/270 to match the orientation in the Hookii app
+   title: Garden
+   ```
+
+The map appears as soon as the bridge streams the first data. Add one card per
+mower. Updates later flow through that single HACS item.
+
+> Don't have HACS yet, or prefer not to use it? You can also copy
+> `custom_components/hookii_neomow/` into your HA `config/custom_components/`
+> folder manually and restart — then continue from step 4.
+
 ## Why this exists
 
 The bridge's built-in map is served over **HA Ingress**, which only exists on
@@ -28,37 +66,6 @@ HAOS/Supervised. Container users had to embed it via a raw URL (an external
 reference). This card renders the same map natively from entity-adjacent
 geometry, so **every** Home Assistant user gets the map with no reference and no
 security trade-off.
-
-## Requirements
-
-1. The **Hookii Bridge** running (add-on on HAOS, or container on
-   Docker/k3s/Compose) and publishing to your MQTT broker.
-2. An **MQTT broker** + the Home Assistant **MQTT integration** configured
-   (HAOS users: the Mosquitto add-on; container users: your own broker).
-
-## Install (via HACS — one item, card included)
-
-The card is **bundled inside the integration** — installing the integration
-serves and auto-registers the card, so there is no second HACS item and no
-Lovelace resource to add by hand.
-
-1. **HACS → ⋮ (top-right) → Custom repositories** → add
-   `https://github.com/torvalstrom/hookii-neomow-ha` with category **Integration**
-   → **Download** → restart Home Assistant.
-2. **Settings → Devices & Services → Add Integration → "Hookii Neomow Map"** →
-   enter the topic prefix (default `hookii/details/device`) and your mowers as
-   `label:serial[:color];…`.
-3. Add the card to any dashboard (it is already registered — just reference it):
-
-   ```yaml
-   type: custom:hookii-mower-map-card
-   mower: garden     # the label you configured (optional if only one)
-   rotate: 0         # degrees CCW to match your in-app orientation
-   title: Garden
-   ```
-
-Updates flow through that single HACS item. (Default-store inclusion — so it's
-findable by search without the custom-repo step — is pending a `home-assistant/brands` PR.)
 
 ## Card options
 
