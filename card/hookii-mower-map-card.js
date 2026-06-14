@@ -101,13 +101,24 @@ class HookiiMowerMapCard extends HTMLElement {
 
     const label = this._activeLabel();
     const g = label ? (this._geom || {})[label] : null;
-    if (!g || !g.robot) {
-      this._body.innerHTML = this._placeholder(
-        g ? "Waiting for the mower to report position…" : "Waiting for map data…"
-      );
+    // Render whenever ANY geometry exists — a docked/offline mower (the common
+    // case) has no live robot position but still has a yard boundary + the cut
+    // paths it has driven, which is exactly what's worth showing.
+    if (!g || !this._hasGeometry(g)) {
+      this._body.innerHTML = this._placeholder("Waiting for map data…");
       return;
     }
     this._body.innerHTML = this._svg(g);
+  }
+
+  _hasGeometry(g) {
+    const b = g.boundary || {};
+    return !!(
+      g.robot ||
+      (g.path && g.path.length) ||
+      (b.mowing && b.mowing.length) ||
+      (b.exclusion && b.exclusion.length)
+    );
   }
 
   _placeholder(text) {
@@ -140,13 +151,13 @@ class HookiiMowerMapCard extends HTMLElement {
       return [r[0], r[1], p[2]];
     });
     const trail = (g.trail || []).map((p) => rotate(p[0], p[1]));
-    const robot = rotate(g.robot.x, g.robot.y);
+    const robot = g.robot ? rotate(g.robot.x, g.robot.y) : null;
 
     // Bounds from path + boundary + robot, padded.
     const bounds = [];
     if (path.length) for (const p of path) bounds.push([p[0], p[1]]);
     else for (const poly of mowing) for (const p of poly) bounds.push(p);
-    bounds.push(robot);
+    if (robot) bounds.push(robot);
 
     let minX, maxX, minY, maxY;
     if (bounds.length > 1) {
@@ -255,24 +266,27 @@ class HookiiMowerMapCard extends HTMLElement {
       );
     }
 
-    // Robot marker + heading arrow.
-    const rsvg = toSvg(robot[0], robot[1]);
-    const r = px * 10;
-    out.push(
-      '<circle cx="' + rsvg[0].toFixed(0) + '" cy="' + rsvg[1].toFixed(0) +
-        '" r="' + r.toFixed(0) + '" fill="' + this._esc(g.color) +
-        '" stroke="#fff" stroke-width="' + (px * 2).toFixed(1) + '"/>'
-    );
-    if (g.robot.heading !== null && g.robot.heading !== undefined) {
-      const a = (Number(g.robot.heading) + (Number(this._config.rotate) || 0)) *
-        (Math.PI / 180);
-      const ahx = Math.sin(a) * px * 18;
-      const ahy = -Math.cos(a) * px * 18;
+    // Robot marker + heading arrow — only when the mower is reporting a live
+    // position. A docked/offline mower renders the yard + coverage without it.
+    if (robot) {
+      const rsvg = toSvg(robot[0], robot[1]);
+      const r = px * 10;
       out.push(
-        '<line x1="' + rsvg[0].toFixed(0) + '" y1="' + rsvg[1].toFixed(0) +
-          '" x2="' + (rsvg[0] + ahx).toFixed(0) + '" y2="' + (rsvg[1] + ahy).toFixed(0) +
-          '" stroke="#fff" stroke-width="' + (px * 3).toFixed(1) + '"/>'
+        '<circle cx="' + rsvg[0].toFixed(0) + '" cy="' + rsvg[1].toFixed(0) +
+          '" r="' + r.toFixed(0) + '" fill="' + this._esc(g.color) +
+          '" stroke="#fff" stroke-width="' + (px * 2).toFixed(1) + '"/>'
       );
+      if (g.robot.heading !== null && g.robot.heading !== undefined) {
+        const a = (Number(g.robot.heading) + (Number(this._config.rotate) || 0)) *
+          (Math.PI / 180);
+        const ahx = Math.sin(a) * px * 18;
+        const ahy = -Math.cos(a) * px * 18;
+        out.push(
+          '<line x1="' + rsvg[0].toFixed(0) + '" y1="' + rsvg[1].toFixed(0) +
+            '" x2="' + (rsvg[0] + ahx).toFixed(0) + '" y2="' + (rsvg[1] + ahy).toFixed(0) +
+            '" stroke="#fff" stroke-width="' + (px * 3).toFixed(1) + '"/>'
+        );
+      }
     }
 
     out.push("</svg>");
@@ -302,7 +316,7 @@ window.customCards.push({
 });
 
 console.info(
-  "%c HOOKII-MOWER-MAP-CARD %c v0.1.0 ",
+  "%c HOOKII-MOWER-MAP-CARD %c v0.1.1 ",
   "color:#0f172a;background:#22c55e;font-weight:700;",
   "color:#22c55e;background:#0f172a;"
 );
