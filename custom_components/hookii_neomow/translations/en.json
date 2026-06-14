@@ -1,0 +1,24 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Hookii Neomow Map",
+        "description": "Reads the Hookii Bridge's map data off MQTT and serves it to the Neomow Map card. Make sure the MQTT integration is configured and the Hookii Bridge (add-on or container) is publishing.",
+        "data": {
+          "topic_prefix": "MQTT topic prefix",
+          "mowers_spec": "Mowers (label:serial[:color]; one per mower, separated by ;)"
+        },
+        "data_description": {
+          "topic_prefix": "The prefix the bridge republishes under. Leave as the default unless you changed it on the bridge.",
+          "mowers_spec": "Example: garden:HKX1EB100JD25010115:#22c55e;pond:HKX2EB100JD24080170"
+        }
+      }
+    },
+    "error": {
+      "invalid_mowers": "Could not parse the mower list. Use label:serial[:color], separated by ;"
+    },
+    "abort": {
+      "already_configured": "These mowers are already configured."
+    }
+  }
+}
