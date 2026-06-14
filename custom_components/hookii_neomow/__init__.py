@@ -29,27 +29,34 @@ PLATFORMS: list[Platform] = []
 # second HACS item or register a Lovelace resource by hand - one HACS install
 # (the integration) brings both the data plane AND the card.
 CARD_FILENAME = "hookii-mower-map-card.js"
-CARD_URL = f"/{DOMAIN}/{CARD_FILENAME}"
+# Served from the package's frontend/ subdir (we register the DIRECTORY, which
+# is the reliable static-path form, and it keeps the integration's .py source
+# out of the public path).
+CARD_DIR_URL = f"/{DOMAIN}_frontend"
+CARD_URL = f"{CARD_DIR_URL}/{CARD_FILENAME}"
 
 
 async def _async_register_card(hass: HomeAssistant) -> None:
-    """Serve + register the bundled Lovelace card (idempotent)."""
+    """Serve + register the bundled Lovelace card (idempotent, non-fatal)."""
     if hass.data.get(f"{DOMAIN}_card_registered"):
         return
-    card_path = os.path.join(os.path.dirname(__file__), CARD_FILENAME)
+    card_dir = os.path.join(os.path.dirname(__file__), "frontend")
     try:
-        # HA 2024.7+: async static path registration.
-        from homeassistant.components.http import StaticPathConfig
+        try:
+            # HA 2024.7+: async static path registration.
+            from homeassistant.components.http import StaticPathConfig
 
-        await hass.http.async_register_static_paths(
-            [StaticPathConfig(CARD_URL, card_path, False)]
-        )
-    except ImportError:
-        # Older HA: synchronous registration.
-        hass.http.register_static_path(CARD_URL, card_path, cache_headers=False)
-    add_extra_js_url(hass, CARD_URL)
-    hass.data[f"{DOMAIN}_card_registered"] = True
-    _LOGGER.debug("registered bundled card at %s", CARD_URL)
+            await hass.http.async_register_static_paths(
+                [StaticPathConfig(CARD_DIR_URL, card_dir, False)]
+            )
+        except ImportError:
+            # Older HA: synchronous registration.
+            hass.http.register_static_path(CARD_DIR_URL, card_dir, cache_headers=False)
+        add_extra_js_url(hass, CARD_URL)
+        hass.data[f"{DOMAIN}_card_registered"] = True
+        _LOGGER.debug("registered bundled card at %s", CARD_URL)
+    except Exception:  # noqa: BLE001 - card is a nicety; never break entry setup
+        _LOGGER.exception("failed to register bundled Lovelace card")
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

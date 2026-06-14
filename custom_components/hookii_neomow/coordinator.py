@@ -158,9 +158,10 @@ class NeomowCoordinator:
             _LOGGER.warning("persist %s/%s failed: %s", label, msg_type, err)
 
     def _schedule_persist(self, label: str, msg_type: str, payload: dict) -> None:
-        self.hass.async_create_task(
-            self.hass.async_add_executor_job(self._persist, label, msg_type, payload)
-        )
+        # Fire-and-forget the blocking file write on the executor. (Do NOT wrap
+        # in async_create_task: async_add_executor_job already returns a Future,
+        # and async_create_task expects a coroutine.)
+        self.hass.async_add_executor_job(self._persist, label, msg_type, payload)
 
     async def async_stop(self) -> None:
         for unsub in self._unsubs:
