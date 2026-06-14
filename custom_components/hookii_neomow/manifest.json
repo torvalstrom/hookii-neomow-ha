@@ -1,13 +1,13 @@
 {
   "domain": "hookii_neomow",
   "name": "Hookii Neomow Map",
-  "version": "0.2.1",
-  "documentation": "https://github.com/torvalstrom/hookii-neomow-ha",
-  "issue_tracker": "https://github.com/torvalstrom/hookii-neomow-ha/issues",
   "codeowners": ["@torvalstrom"],
   "config_flow": true,
   "dependencies": ["mqtt", "websocket_api", "http", "frontend"],
-  "iot_class": "local_push",
+  "documentation": "https://github.com/torvalstrom/hookii-neomow-ha",
   "integration_type": "service",
-  "requirements": []
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/torvalstrom/hookii-neomow-ha/issues",
+  "requirements": [],
+  "version": "0.2.2"
 }
