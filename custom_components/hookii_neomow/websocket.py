@@ -38,7 +38,11 @@ def ws_subscribe(
 
     @callback
     def _send(label: str, geometry: dict) -> None:
-        connection.send_event(msg["id"], {"label": label, "geometry": geometry})
+        connection.send_message(
+            websocket_api.event_message(
+                msg["id"], {"label": label, "geometry": geometry}
+            )
+        )
 
     # Per-entry dispatcher listeners -> push the changed mower.
     unsubs = []

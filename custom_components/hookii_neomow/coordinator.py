@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -107,14 +108,59 @@ class NeomowCoordinator:
             label = m["label"]
             self.mowers[label] = MowerState(m["serial"], label, m["color"])
             self._serial_to_label[m["serial"]] = label
+        # Persist the big, slow-to-republish captures (boundary + cut paths) so
+        # an HA restart does not blank the map for the minutes-to-hours until
+        # the cloud next streams DEVICE_MAP_V2 / ALL_PATH_LIST_V2. Seedable: drop
+        # the standalone neomow-viz's <label>_<TYPE>.json files in here.
+        self._store_dir = hass.config.path("hookii_neomow_data")
+
+    # Capture msgType -> MowerState attribute, for persistence round-trips.
+    _PERSIST_KEYS = {
+        "DEVICE_MAP_V2": "device_map",
+        "ALL_PATH_LIST_V2": "path_list",
+        "ALL_PATH_INDEX_V2": "path_index",
+    }
 
     async def async_start(self) -> None:
-        """Subscribe to one topic per configured mower."""
+        """Load persisted captures, then subscribe to one topic per mower."""
+        await self.hass.async_add_executor_job(self._load_persisted)
         for state in self.mowers.values():
             topic = f"{self.topic_prefix}/{state.serial}"
             unsub = await mqtt.async_subscribe(self.hass, topic, self._on_message, 0)
             self._unsubs.append(unsub)
             _LOGGER.debug("subscribed %s -> %s", topic, state.label)
+
+    def _load_persisted(self) -> None:
+        """Restore captured boundary/path payloads from disk (executor thread)."""
+        for label, state in self.mowers.items():
+            for msg_type, attr in self._PERSIST_KEYS.items():
+                path = os.path.join(self._store_dir, f"{label}_{msg_type}.json")
+                if not os.path.exists(path):
+                    continue
+                try:
+                    with open(path, encoding="utf-8") as fh:
+                        setattr(state, attr, json.load(fh))
+                    setattr(state, f"{attr}_at", _now_iso())
+                    _LOGGER.debug("loaded persisted %s for %s", msg_type, label)
+                except (OSError, ValueError) as err:
+                    _LOGGER.warning("load %s failed: %s", path, err)
+
+    def _persist(self, label: str, msg_type: str, payload: dict) -> None:
+        """Write a capture to disk (executor thread)."""
+        try:
+            os.makedirs(self._store_dir, exist_ok=True)
+            tmp = os.path.join(self._store_dir, f"{label}_{msg_type}.json.tmp")
+            final = os.path.join(self._store_dir, f"{label}_{msg_type}.json")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh)
+            os.replace(tmp, final)
+        except OSError as err:
+            _LOGGER.warning("persist %s/%s failed: %s", label, msg_type, err)
+
+    def _schedule_persist(self, label: str, msg_type: str, payload: dict) -> None:
+        self.hass.async_create_task(
+            self.hass.async_add_executor_job(self._persist, label, msg_type, payload)
+        )
 
     async def async_stop(self) -> None:
         for unsub in self._unsubs:
@@ -164,6 +210,7 @@ class NeomowCoordinator:
         if msg_type == "DEVICE_MAP_V2":
             state.device_map = payload
             state.device_map_at = _now_iso()
+            self._schedule_persist(state.label, "DEVICE_MAP_V2", payload)
             _LOGGER.debug("DEVICE_MAP_V2 for %s", state.label)
             return True
 
@@ -175,6 +222,7 @@ class NeomowCoordinator:
             if not existing or new_count >= existing * 0.10:
                 state.path_list = payload
                 state.path_list_at = _now_iso()
+                self._schedule_persist(state.label, "ALL_PATH_LIST_V2", payload)
                 return True
             _LOGGER.debug(
                 "skipped stale ALL_PATH_LIST_V2 for %s (%d vs %d)",
@@ -185,6 +233,7 @@ class NeomowCoordinator:
         if msg_type == "ALL_PATH_INDEX_V2":
             state.path_index = payload
             state.path_index_at = _now_iso()
+            self._schedule_persist(state.label, "ALL_PATH_INDEX_V2", payload)
             return True
 
         if msg_type == "REGION_TASK":
