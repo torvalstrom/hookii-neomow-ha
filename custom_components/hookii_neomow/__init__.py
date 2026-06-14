@@ -9,7 +9,9 @@ geometry the card needs (which is too large / too raw for entity attributes).
 from __future__ import annotations
 
 import logging
+import os
 
+from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -21,6 +23,33 @@ from . import websocket
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = []
+
+# The Lovelace card ships bundled inside this integration. We serve it from a
+# static path and load it on the frontend so the user never has to install a
+# second HACS item or register a Lovelace resource by hand - one HACS install
+# (the integration) brings both the data plane AND the card.
+CARD_FILENAME = "hookii-mower-map-card.js"
+CARD_URL = f"/{DOMAIN}/{CARD_FILENAME}"
+
+
+async def _async_register_card(hass: HomeAssistant) -> None:
+    """Serve + register the bundled Lovelace card (idempotent)."""
+    if hass.data.get(f"{DOMAIN}_card_registered"):
+        return
+    card_path = os.path.join(os.path.dirname(__file__), CARD_FILENAME)
+    try:
+        # HA 2024.7+: async static path registration.
+        from homeassistant.components.http import StaticPathConfig
+
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig(CARD_URL, card_path, False)]
+        )
+    except ImportError:
+        # Older HA: synchronous registration.
+        hass.http.register_static_path(CARD_URL, card_path, cache_headers=False)
+    add_extra_js_url(hass, CARD_URL)
+    hass.data[f"{DOMAIN}_card_registered"] = True
+    _LOGGER.debug("registered bundled card at %s", CARD_URL)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -36,6 +65,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     websocket.async_register(hass)
+    await _async_register_card(hass)
 
     entry.async_on_unload(entry.add_update_listener(_async_reload))
     return True

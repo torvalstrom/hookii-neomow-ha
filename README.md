@@ -34,15 +34,19 @@ security trade-off.
 2. An **MQTT broker** + the Home Assistant **MQTT integration** configured
    (HAOS users: the Mosquitto add-on; container users: your own broker).
 
-## Install (development / dogfood)
+## Install (via HACS — one item, card included)
 
-1. Copy `custom_components/hookii_neomow/` into your HA `config/custom_components/`
-   and restart Home Assistant.
-2. **Settings → Devices & Services → Add Integration → "Hookii Neomow Map"**,
+The card is **bundled inside the integration** — installing the integration
+serves and auto-registers the card, so there is no second HACS item and no
+Lovelace resource to add by hand.
+
+1. **HACS → ⋮ (top-right) → Custom repositories** → add
+   `https://github.com/torvalstrom/hookii-neomow-ha` with category **Integration**
+   → **Download** → restart Home Assistant.
+2. **Settings → Devices & Services → Add Integration → "Hookii Neomow Map"** →
    enter the topic prefix (default `hookii/details/device`) and your mowers as
    `label:serial[:color];…`.
-3. Add `card/hookii-mower-map-card.js` as a Lovelace resource (module), then add
-   the card:
+3. Add the card to any dashboard (it is already registered — just reference it):
 
    ```yaml
    type: custom:hookii-mower-map-card
@@ -51,4 +55,5 @@ security trade-off.
    title: Garden
    ```
 
-HACS one-click distribution lands once dogfooded. Status: **work in progress.**
+Updates flow through that single HACS item. (Default-store inclusion — so it's
+findable by search without the custom-repo step — is pending a `home-assistant/brands` PR.)
