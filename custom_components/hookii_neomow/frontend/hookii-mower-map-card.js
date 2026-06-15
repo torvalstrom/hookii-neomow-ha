@@ -320,7 +320,7 @@ window.customCards.push({
 });
 
 console.info(
-  "%c HOOKII-MOWER-MAP-CARD %c v0.2.2 ",
+  "%c HOOKII-MOWER-MAP-CARD %c v0.2.3 ",
   "color:#0f172a;background:#22c55e;font-weight:700;",
   "color:#22c55e;background:#0f172a;"
 );

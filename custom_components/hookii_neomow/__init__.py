@@ -38,7 +38,7 @@ CARD_DIR_URL = f"/{DOMAIN}_frontend"
 # updated card a NEW module-map URL so customElements.define runs for it - a
 # same-named custom element cannot be redefined in a live frontend session, so
 # an unchanged URL would keep serving the previously-defined (old) card class.
-CARD_VERSION = "0.2.2"
+CARD_VERSION = "0.2.3"
 CARD_URL = f"{CARD_DIR_URL}/{CARD_FILENAME}?v={CARD_VERSION}"
 
 
