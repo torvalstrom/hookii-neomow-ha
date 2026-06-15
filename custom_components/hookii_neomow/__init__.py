@@ -33,7 +33,13 @@ CARD_FILENAME = "hookii-mower-map-card.js"
 # is the reliable static-path form, and it keeps the integration's .py source
 # out of the public path).
 CARD_DIR_URL = f"/{DOMAIN}_frontend"
-CARD_URL = f"{CARD_DIR_URL}/{CARD_FILENAME}"
+# Bump CARD_VERSION on every hookii-mower-map-card.js change. The version query
+# (a) cache-busts the browser/service-worker module cache and (b) gives the
+# updated card a NEW module-map URL so customElements.define runs for it - a
+# same-named custom element cannot be redefined in a live frontend session, so
+# an unchanged URL would keep serving the previously-defined (old) card class.
+CARD_VERSION = "0.2.2"
+CARD_URL = f"{CARD_DIR_URL}/{CARD_FILENAME}?v={CARD_VERSION}"
 
 
 async def _async_register_card(hass: HomeAssistant) -> None:
@@ -52,11 +58,46 @@ async def _async_register_card(hass: HomeAssistant) -> None:
         except ImportError:
             # Older HA: synchronous registration.
             hass.http.register_static_path(CARD_DIR_URL, card_dir, cache_headers=False)
-        add_extra_js_url(hass, CARD_URL)
+        # Register as a Lovelace RESOURCE (loaded + awaited BEFORE the dashboard
+        # renders) rather than add_extra_js_url (which is not awaited -> the card
+        # element can be undefined at first render -> "Custom element doesn't
+        # exist"). The versioned URL also avoids the plain-URL service-worker
+        # cache pinning an old card. Falls back to add_extra_js_url in YAML-mode
+        # lovelace where the resource collection is unavailable.
+        await _async_register_resource(hass, CARD_URL)
         hass.data[f"{DOMAIN}_card_registered"] = True
         _LOGGER.debug("registered bundled card at %s", CARD_URL)
     except Exception:  # noqa: BLE001 - card is a nicety; never break entry setup
         _LOGGER.exception("failed to register bundled Lovelace card")
+
+
+async def _async_register_resource(hass: HomeAssistant, url: str) -> None:
+    """Add (or update) the card as a Lovelace module resource, idempotently."""
+    try:
+        lovelace = hass.data.get("lovelace")
+        resources = getattr(lovelace, "resources", None)
+        if resources is None and isinstance(lovelace, dict):
+            resources = lovelace.get("resources")
+        if resources is None or not hasattr(resources, "async_create_item"):
+            # YAML-mode lovelace (or unavailable): resources are read-only there,
+            # so fall back to the frontend extra-module mechanism.
+            add_extra_js_url(hass, url)
+            return
+        if hasattr(resources, "loaded") and not resources.loaded:
+            await resources.async_load()
+            resources.loaded = True
+        base = url.split("?", 1)[0]
+        for item in resources.async_items():
+            if (item.get("url") or "").split("?", 1)[0] == base:
+                if item.get("url") != url:
+                    await resources.async_update_item(
+                        item["id"], {"res_type": "module", "url": url}
+                    )
+                return
+        await resources.async_create_item({"res_type": "module", "url": url})
+    except Exception:  # noqa: BLE001
+        _LOGGER.exception("Lovelace resource registration failed; using extra_js_url")
+        add_extra_js_url(hass, url)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
