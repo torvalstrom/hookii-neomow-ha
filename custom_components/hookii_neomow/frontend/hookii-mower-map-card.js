@@ -153,10 +153,14 @@ class HookiiMowerMapCard extends HTMLElement {
     const trail = (g.trail || []).map((p) => rotate(p[0], p[1]));
     const robot = g.robot ? rotate(g.robot.x, g.robot.y) : null;
 
-    // Bounds from path + boundary + robot, padded.
+    // Bounds from the FULL mowing territory + path + robot, padded. We always
+    // include every mowing zone (not just the current path's bbox) so the view
+    // frames the WHOLE map - all zones - instead of zooming into the single
+    // zone the mower is currently working. Exclusion zones sit inside the
+    // mowing area so they need not extend the bounds.
     const bounds = [];
+    for (const poly of mowing) for (const p of poly) bounds.push(p);
     if (path.length) for (const p of path) bounds.push([p[0], p[1]]);
-    else for (const poly of mowing) for (const p of poly) bounds.push(p);
     if (robot) bounds.push(robot);
 
     let minX, maxX, minY, maxY;
@@ -316,7 +320,7 @@ window.customCards.push({
 });
 
 console.info(
-  "%c HOOKII-MOWER-MAP-CARD %c v0.2.1 ",
+  "%c HOOKII-MOWER-MAP-CARD %c v0.2.2 ",
   "color:#0f172a;background:#22c55e;font-weight:700;",
   "color:#22c55e;background:#0f172a;"
 );
