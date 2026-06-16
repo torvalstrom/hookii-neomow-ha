@@ -1,0 +1,277 @@
+blueprint:
+  name: Neomow X - Auto-heal failed docking (kissing dock + alarm 514/515/116)
+  description: >
+    Self-healing redock + alarm recovery for **Hookii Neomow X** mowers via
+    the native [hookii-neomow-ha
+    integration](https://github.com/torvalstrom/hookii-neomow-ha).
+
+
+    **Why this exists**
+
+
+    The Neomow X charging contacts are two flat square pads on the mower bottom
+    that quickly accumulate dust and oxidation in dry/hot weather. The dock side
+    has two spring-loaded "finger" contacts that oxidise over time. Combined,
+    this means the mower frequently fails its first dock attempt and either sits
+    with `chargeCurrent` flapping around 0 A (kissing the dock but not drawing
+    power), or throws docking alarm `514` / `515` / `116`.
+
+
+    The earlier Neomow firmware had a built-in self-heal that re-docked
+    automatically until contact succeeded. Hookii removed that behaviour in a
+    later firmware revision even though it worked well, and the symptom is now
+    one of the most common owner complaints.
+
+
+    **What this blueprint does**
+
+
+    Two recovery paths using the native integration's button entities:
+
+
+    - **Path A — explicit alarm:** when the **Problem** binary sensor goes `on`
+    and stays on for 60 s, press the **Clear Exception** button (same as tapping
+    "OK to resolve" in the Hookii app). The Problem sensor trips on *any*
+    `NOTICE_ALARM` `errCode` from the cloud, including `514` (docking failed),
+    `515` (docking failed), and `116` (obstacle at charging station).
+
+    - **Path B — kissing dock:** when battery is below the configured threshold
+    AND charge current has been flapping inside the [-1, 1] A band for 60 s
+    (mower is sitting on the dock but not drawing power), press the **Return to
+    Dock** button to issue a recharge command — the mower physically backs off
+    and re-attempts docking.
+
+
+    **Stale-data guard:** both paths are skipped while telemetry is stale. When
+    the Hookii cloud push pipeline stalls, `battery` and `charge_current` freeze
+    — often at `0 %` / `0 A` — which looks identical to a low-battery kissing
+    dock. The automation only fires if the battery sensor reported within
+    `max_telemetry_age_minutes` (default 15) and reads > 0.
+
+
+    A 2-minute `time_pattern` safety net re-evaluates conditions, so if the
+    first redock attempt also failed (which is common — the contact problem can
+    take 2–3 redocks to clear), the automation fires again. This matches the
+    manual workflow most owners already use.
+
+
+    **Prerequisites**
+
+    1. hookii-neomow-ha integration installed and configured.
+
+    2. A push notification service (optional — blueprint works silently without
+    one).
+
+
+    **Tested on:** Neomow X Pro. Should work on any Hookii Neomow X variant.
+
+  domain: automation
+  source_url: https://github.com/torvalstrom/hookii-neomow-ha/blob/main/blueprints/automation/torvalstrom/neomow_x_kissing_dock_auto_heal.yaml
+  input:
+    battery_sensor:
+      name: Battery sensor
+      description: >-
+        The integration's battery percentage sensor for this mower
+        (e.g. `sensor.neomow_battery`).
+      selector:
+        entity:
+          domain:
+            - sensor
+          device_class:
+            - battery
+          multiple: false
+
+    charge_current_sensor:
+      name: Charge current sensor
+      description: >-
+        The integration's charge-current sensor (e.g.
+        `sensor.neomow_charge_current`). Positive when charging, negative
+        when discharging, near 0 A when the mower is kissing the dock
+        without making electrical contact.
+      selector:
+        entity:
+          domain:
+            - sensor
+          device_class:
+            - current
+          multiple: false
+
+    problem_binary_sensor:
+      name: Problem binary sensor
+      description: >-
+        The integration's Problem binary sensor (e.g.
+        `binary_sensor.neomow_problem`). Goes `on` whenever the Hookii
+        cloud sends a `NOTICE_ALARM` with any `errCode` — including `514`
+        / `515` (docking failed) and `116` (obstacle at charging station).
+        Automatically clears once the mower is charging or mowing again.
+      selector:
+        entity:
+          domain:
+            - binary_sensor
+          device_class:
+            - problem
+          multiple: false
+
+    recover_alarm_button:
+      name: Clear Exception button
+      description: >-
+        The integration's **Clear Exception** button (e.g.
+        `button.neomow_clear_exception`). Pressing it sends the
+        `recover_alarm` command to the Hookii cloud — identical to tapping
+        "OK to resolve" in the Hookii mobile app.
+      selector:
+        entity:
+          domain:
+            - button
+          multiple: false
+
+    dock_button:
+      name: Return to Dock button
+      description: >-
+        The integration's **Return to Dock** button (e.g.
+        `button.neomow_return_to_dock`). Pressing it sends the mower back
+        to the dock — identical to the mobile app's "Recharge" button. Used
+        for the kissing-dock recovery (Path B).
+      selector:
+        entity:
+          domain:
+            - button
+          multiple: false
+
+    battery_threshold:
+      name: Battery threshold for kissing-dock path
+      description: >-
+        Path B (kissing dock) only fires when battery is below this
+        percentage AND charge current is flapping near 0 A. 20 % is a safe
+        default that catches docking failures before the mower runs flat,
+        without triggering on a healthy 90–95 % top-up plateau.
+      default: 20
+      selector:
+        number:
+          min: 5
+          max: 50
+          unit_of_measurement: "%"
+          mode: slider
+          step: 1
+
+    max_telemetry_age_minutes:
+      name: Max telemetry age (stale-data guard)
+      description: >-
+        Both recovery paths are skipped when the integration has not
+        received a fresh STATUS push for this many minutes. When the Hookii
+        cloud push pipeline stalls, `battery` freezes — often at `0 %` —
+        and `charge_current` freezes near `0 A`, which looks exactly like a
+        low-battery kissing dock. Freshness is measured from the battery
+        sensor's `last_reported` timestamp. 15 minutes comfortably exceeds
+        the normal push cadence.
+      default: 15
+      selector:
+        number:
+          min: 3
+          max: 120
+          unit_of_measurement: min
+          mode: slider
+          step: 1
+
+    notify_service:
+      name: Notification service (optional)
+      description: >-
+        Service to call when the auto-heal fires (e.g.
+        `notify.mobile_app_your_phone`). Leave blank to run silently. The
+        notification includes which recovery path fired and the current
+        battery / charge-current readings.
+      default: ""
+      selector:
+        text:
+          multiline: false
+
+mode: single
+
+trigger:
+  - platform: state
+    entity_id: !input problem_binary_sensor
+    to: "on"
+    for:
+      seconds: 60
+    id: error_trigger
+
+  - platform: numeric_state
+    entity_id: !input charge_current_sensor
+    above: -1
+    below: 1
+    for:
+      seconds: 60
+    id: charge_flap_trigger
+
+  - platform: time_pattern
+    minutes: /2
+    id: safety_net
+
+variables:
+  battery_sensor: !input battery_sensor
+  charge_current_sensor: !input charge_current_sensor
+  problem_binary_sensor: !input problem_binary_sensor
+  recover_alarm_button: !input recover_alarm_button
+  dock_button: !input dock_button
+  battery_threshold: !input battery_threshold
+  max_telemetry_age_minutes: !input max_telemetry_age_minutes
+  notify_service: !input notify_service
+
+condition:
+  - condition: template
+    alias: Telemetry is fresh — skip on stale cloud data
+    value_template: >-
+      {% set b = states[battery_sensor] %}
+      {{ b is not none
+         and (now() - b.last_reported).total_seconds() < (max_telemetry_age_minutes | int * 60)
+         and (states(battery_sensor) | float(-1)) > 0 }}
+
+  - condition: or
+    conditions:
+      - condition: state
+        entity_id: !input problem_binary_sensor
+        state: "on"
+      - condition: and
+        conditions:
+          - condition: numeric_state
+            entity_id: !input battery_sensor
+            below: !input battery_threshold
+          - condition: template
+            value_template: >-
+              {% set c = states(charge_current_sensor) | float(0) %}
+              {{ -1 < c < 1 }}
+
+action:
+  - variables:
+      is_alarm: "{{ is_state(problem_binary_sensor, 'on') }}"
+      battery_now: "{{ states(battery_sensor) }}"
+      charge_now: "{{ states(charge_current_sensor) }}"
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ is_alarm }}"
+        sequence:
+          - action: button.press
+            target:
+              entity_id: !input recover_alarm_button
+    default:
+      - action: button.press
+        target:
+          entity_id: !input dock_button
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ notify_service != '' }}"
+        sequence:
+          - action: "{{ notify_service }}"
+            data:
+              title: Neomow auto-healed
+              message: >-
+                {%- if is_alarm -%}
+                  Cleared alarm (Clear Exception) at {{ now().strftime('%H:%M') }}.
+                {%- else -%}
+                  Return to Dock issued at {{ now().strftime('%H:%M') }}
+                  (battery {{ battery_now }}% + charge current {{ charge_now }} A — kissing dock).
+                {%- endif %}
