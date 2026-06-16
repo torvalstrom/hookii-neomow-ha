@@ -48,6 +48,8 @@ from typing import Any, Callable
 import paho.mqtt.client as mqtt
 import requests
 
+from .status import normalise_status
+
 _LOGGER = logging.getLogger(__name__)
 
 # Headers the Hookii Android app sends on EVERY request (login + post-auth),
@@ -331,10 +333,6 @@ class HookiiCloudClient:
         # Per-mower firmware-upgrade gate (robotStatus 6): drop commands so a
         # stray press can't interfere with an OTA flash.
         self._upgrading: dict[str, bool] = {}
-        # Per-mower last-known-good STATUS, merged field-by-field. Hookii emits
-        # sparse STATUS packets; merging non-null fields and emitting the
-        # COMPLETE status stops HA sensors flickering to "unknown".
-        self._last_status: dict[str, dict] = {}
 
     # ---- lifecycle ----------------------------------------------------
 
@@ -406,17 +404,17 @@ class HookiiCloudClient:
                 _LOGGER.warning("[%s] non-JSON payload on %s", self.acct.label, msg.topic)
                 return
             if payload.get("msgType") == "STATUS":
-                # Merge non-null fields into the per-mower cache and emit the
-                # COMPLETE status, so a sparse packet can't blank sensors.
+                # Normalise THIS message's raw STATUS (fan chassisData/taskInfo
+                # out, derive ha_state) BEFORE handing it on. Must be done on the
+                # fresh per-message dict: normalise_status uses setdefault for the
+                # fan-out, so running it on a persistent accumulator would freeze
+                # the derived fields after the first message. The coordinator owns
+                # the sparse-merge accumulation across messages.
                 st_in = payload.get("data", {}).get("STATUS", {})
-                cached = self._last_status.setdefault(serial, {})
                 if isinstance(st_in, dict):
-                    for k, v in st_in.items():
-                        if v is not None:
-                            cached[k] = v
-                payload.setdefault("data", {})["STATUS"] = cached
-                # robotStatus 6 == firmware upgrading -> gate commands.
-                self._upgrading[serial] = cached.get("robotStatus") == 6
+                    normalise_status(st_in)
+                    # robotStatus 6 == firmware upgrading -> gate commands.
+                    self._upgrading[serial] = st_in.get("robotStatus") == 6
             self._on_telemetry(serial, payload)
         except Exception:  # noqa: BLE001 - never let one bad message kill the loop
             _LOGGER.exception("[%s] error processing inbound msg", self.acct.label)

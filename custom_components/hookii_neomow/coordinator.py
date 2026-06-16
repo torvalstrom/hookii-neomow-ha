@@ -29,7 +29,6 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from . import geometry
 from .api import HookiiAccount, HookiiCloudClient, HookiiConfig
-from .status import normalise_status
 from .const import (
     SIGNAL_MOWER_UPDATED,
     TRAIL_MAX,
@@ -203,11 +202,17 @@ class NeomowCoordinator:
         msg_type = payload.get("msgType", "?")
 
         if msg_type == "STATUS":
-            status = payload.get("data", {}).get("STATUS", {})
-            if isinstance(status, dict):
-                normalise_status(status)
-            state.status = status if isinstance(status, dict) else {}
-            parsed = geometry.parse_status(status)
+            # The cloud client already normalised this message's raw STATUS.
+            # Accumulate it into the persistent per-mower status by merging
+            # non-null fields, so a sparse packet can't blank a sensor and the
+            # latest value of every field is always present. (Assignment-merge,
+            # NOT setdefault - the values must track the newest message.)
+            incoming = payload.get("data", {}).get("STATUS", {})
+            if isinstance(incoming, dict):
+                for k, v in incoming.items():
+                    if v is not None:
+                        state.status[k] = v
+            parsed = geometry.parse_status(state.status)
             if not parsed:
                 # Even without a position fix, a STATUS refresh can carry new
                 # battery/work fields the entities want - signal a change.
