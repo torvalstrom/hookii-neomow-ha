@@ -25,5 +25,11 @@
     "abort": {
       "already_configured": "This Hookii account is already configured."
     }
+  },
+  "entity": {
+    "sensor": {
+      "blade_rpm": { "name": "Blade speed" },
+      "mowing_coverage": { "name": "Mowing coverage" }
+    }
   }
 }

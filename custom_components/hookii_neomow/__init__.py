@@ -25,7 +25,7 @@ from . import websocket
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = []
+PLATFORMS: list[Platform] = [Platform.LAWN_MOWER, Platform.SENSOR]
 
 # The Lovelace card ships bundled inside this integration. We serve it from a
 # static path and load it on the frontend so the user never has to install a
@@ -133,18 +133,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websocket.async_register(hass)
     await _async_register_card(hass)
 
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
     entry.async_on_unload(entry.add_update_listener(_async_reload))
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     coordinator: NeomowCoordinator | None = hass.data.get(DOMAIN, {}).pop(
         entry.entry_id, None
     )
     if coordinator is not None:
         await coordinator.async_stop()
-    return True
+    return unloaded
 
 
 async def _async_reload(hass: HomeAssistant, entry: ConfigEntry) -> None:

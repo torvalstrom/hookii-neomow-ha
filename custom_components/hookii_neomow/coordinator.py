@@ -29,6 +29,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from . import geometry
 from .api import HookiiAccount, HookiiCloudClient, HookiiConfig
+from .status import normalise_status
 from .const import (
     SIGNAL_MOWER_UPDATED,
     TRAIL_MAX,
@@ -203,6 +204,8 @@ class NeomowCoordinator:
 
         if msg_type == "STATUS":
             status = payload.get("data", {}).get("STATUS", {})
+            if isinstance(status, dict):
+                normalise_status(status)
             state.status = status if isinstance(status, dict) else {}
             parsed = geometry.parse_status(status)
             if not parsed:
