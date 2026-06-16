@@ -1,0 +1,317 @@
+blueprint:
+  name: Neomow X - Stuck-in-field notification + recovery
+  description: >
+    Actionable push notification + optional auto-timeout for a **Hookii
+    Neomow X** mower that gets stuck while mowing, via the native
+    [hookii-neomow-ha
+    integration](https://github.com/torvalstrom/hookii-neomow-ha).
+
+
+    **What triggers it**
+
+
+    The Problem binary sensor goes `on` and the lawn mower entity is in the
+    `mowing` state — confirming the alarm came from the field, not the dock.
+    Docking alarms (`514` / `515` / `116`) are handled separately by the
+    *Kissing-dock auto-heal* blueprint; this blueprint deliberately ignores
+    them so the two don't conflict.
+
+
+    **What it does**
+
+    1. Presses the **Camera snapshot** button to fetch a live image.
+
+    2. Waits 8 s for the REST round-trip to complete.
+
+    3. Sends an actionable push notification with the snapshot image inline
+    and three buttons: **Start mowing**, **Return to dock**, **Ignore**.
+
+    4. Waits for your tap, or for the mower to self-recover (Problem clears
+    on its own).
+
+    5. **Start mowing** — presses Clear Exception then Start.
+
+    6. **Return to dock** — sends the mower home (breakpoints kept).
+
+    7. **Ignore** — leaves the mower where it is; you'll handle it manually.
+
+
+    **Auto-timeout (optional)**
+
+
+    If no notification tap arrives within the configured timeout, an
+    auto-timeout button of your choosing is pressed. Three sensible options:
+
+    - `button.<name>_return_to_dock` — navigates home, breakpoints **kept**
+    (mower resumes from where it stopped next session).
+
+    - `button.<name>_stop_keep_progress` — halts in place, breakpoints
+    **kept** (safe if the mower may be entangled — no movement command).
+
+    - `button.<name>_stop_clear_progress` — halts in place, breakpoints
+    **cleared** (starts a full fresh mow next time).
+
+
+    Leave auto-timeout at **0** (disabled) if the mower could be physically
+    stuck on something — sending any movement command makes it worse.
+
+
+    **mode: single** — while the automation is waiting for your tap, new
+    triggers (including a safety-net re-alarm) are held off. Once you act
+    (or ignore), the automation exits and is ready for the next event.
+
+
+    **Prerequisites**
+
+    1. hookii-neomow-ha integration installed and configured.
+
+    2. HA Companion app on iOS or Android for actionable notifications with
+    inline camera image.
+
+  domain: automation
+  source_url: https://github.com/torvalstrom/hookii-neomow-ha/blob/main/blueprints/automation/torvalstrom/neomow_x_stuck_field_recovery.yaml
+  input:
+    lawn_mower_entity:
+      name: Lawn mower entity
+      description: >-
+        The integration's lawn mower entity
+        (e.g. `lawn_mower.cottage_conchita`). Used to confirm the mower was
+        in `mowing` state when the alarm fired, so this blueprint and the
+        kissing-dock blueprint don't both react to the same docking alarm.
+      selector:
+        entity:
+          domain:
+            - lawn_mower
+          multiple: false
+
+    problem_binary_sensor:
+      name: Problem binary sensor
+      description: >-
+        The integration's Problem binary sensor
+        (e.g. `binary_sensor.neomow_problem`). Goes `on` on any
+        `NOTICE_ALARM` from the cloud.
+      selector:
+        entity:
+          domain:
+            - binary_sensor
+          device_class:
+            - problem
+          multiple: false
+
+    snapshot_button:
+      name: Camera snapshot button
+      description: >-
+        The integration's Camera snapshot button
+        (e.g. `button.neomow_camera_snapshot`). Pressed first to fetch a
+        fresh image before the notification is sent.
+      selector:
+        entity:
+          domain:
+            - button
+          multiple: false
+
+    camera_entity:
+      name: Camera entity
+      description: >-
+        The integration's camera entity
+        (e.g. `camera.neomow_last_snapshot`). The snapshot appears inline
+        in the push notification.
+      selector:
+        entity:
+          domain:
+            - camera
+          multiple: false
+
+    clear_exception_button:
+      name: Clear Exception button
+      description: >-
+        The integration's Clear Exception button
+        (e.g. `button.neomow_clear_exception`). Pressed (before Start) to
+        clear the active alarm when you choose "Start mowing".
+      selector:
+        entity:
+          domain:
+            - button
+          multiple: false
+
+    start_button:
+      name: Start button
+      description: >-
+        The integration's Start button (e.g. `button.neomow_start`).
+      selector:
+        entity:
+          domain:
+            - button
+          multiple: false
+
+    dock_button:
+      name: Return to Dock button
+      description: >-
+        The integration's Return to Dock button
+        (e.g. `button.neomow_return_to_dock`). Used for the "Return to
+        dock" notification action.
+      selector:
+        entity:
+          domain:
+            - button
+          multiple: false
+
+    notify_service:
+      name: Notification service
+      description: >-
+        Service to send the stuck-mower notification
+        (e.g. `notify.mobile_app_your_phone`). Must support actionable
+        notifications — requires the HA Companion app on iOS or Android.
+      default: ""
+      selector:
+        text:
+          multiline: false
+
+    auto_timeout_minutes:
+      name: Auto-timeout (0 = disabled)
+      description: >-
+        Minutes to wait for a notification tap before the auto-timeout
+        button (below) is pressed. Set to **0** to wait indefinitely.
+        Do **not** enable if the mower may be physically entangled — a
+        movement command won't help.
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 240
+          unit_of_measurement: min
+          mode: slider
+          step: 5
+
+    auto_timeout_button:
+      name: Auto-timeout button (optional)
+      description: >-
+        Entity ID of the button to press when the auto-timeout fires. Only
+        used when auto-timeout is > 0. Paste one of:
+        `button.<name>_return_to_dock` — navigates home, breakpoints kept;
+        `button.<name>_stop_keep_progress` — stops in place, breakpoints kept;
+        `button.<name>_stop_clear_progress` — stops in place, breakpoints cleared.
+        Leave blank if auto-timeout is disabled.
+      default: ""
+      selector:
+        text:
+          multiline: false
+
+mode: single
+
+trigger:
+  - platform: state
+    entity_id: !input problem_binary_sensor
+    to: "on"
+    for:
+      seconds: 30
+
+variables:
+  lawn_mower_entity: !input lawn_mower_entity
+  camera_entity: !input camera_entity
+  notify_service: !input notify_service
+  auto_timeout_minutes: !input auto_timeout_minutes
+  auto_timeout_button: !input auto_timeout_button
+  mower_name: "{{ state_attr(lawn_mower_entity, 'friendly_name') or 'Mower' }}"
+  action_start: >-
+    {{ 'NEOMOW_START_' ~ (this.entity_id | replace('.', '_') | replace('-', '_')) }}
+  action_dock: >-
+    {{ 'NEOMOW_DOCK_' ~ (this.entity_id | replace('.', '_') | replace('-', '_')) }}
+  action_ignore: >-
+    {{ 'NEOMOW_IGNORE_' ~ (this.entity_id | replace('.', '_') | replace('-', '_')) }}
+
+condition:
+  - condition: state
+    entity_id: !input problem_binary_sensor
+    state: "on"
+  - condition: state
+    entity_id: !input lawn_mower_entity
+    state: mowing
+
+action:
+  - action: button.press
+    target:
+      entity_id: !input snapshot_button
+
+  - delay:
+      seconds: 8
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ notify_service != '' }}"
+        sequence:
+          - action: "{{ notify_service }}"
+            data:
+              title: "{{ mower_name }} is stuck"
+              message: Stopped in the field — check the snapshot and tap an action.
+              data:
+                image: "/api/camera_proxy/{{ camera_entity }}"
+                actions:
+                  - action: "{{ action_start }}"
+                    title: Start mowing
+                  - action: "{{ action_dock }}"
+                    title: Return to dock
+                  - action: "{{ action_ignore }}"
+                    title: Ignore
+
+  - wait_for_trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "{{ action_start }}"
+        id: tapped_start
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "{{ action_dock }}"
+        id: tapped_dock
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: "{{ action_ignore }}"
+        id: tapped_ignore
+      - platform: state
+        entity_id: !input problem_binary_sensor
+        to: "off"
+        id: self_recovered
+    timeout:
+      minutes: >-
+        {{ (auto_timeout_minutes | int) if (auto_timeout_minutes | int) > 0 else 1440 }}
+    continue_on_timeout: true
+
+  - variables:
+      response: "{{ wait.trigger.id if wait.trigger is not none else 'timeout' }}"
+
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ response == 'tapped_start' }}"
+        sequence:
+          - action: button.press
+            target:
+              entity_id: !input clear_exception_button
+          - delay:
+              seconds: 5
+          - action: button.press
+            target:
+              entity_id: !input start_button
+
+      - conditions:
+          - condition: template
+            value_template: "{{ response == 'tapped_dock' }}"
+        sequence:
+          - action: button.press
+            target:
+              entity_id: !input dock_button
+
+      - conditions:
+          - condition: template
+            value_template: >-
+              {{ response == 'timeout'
+                 and (auto_timeout_minutes | int) > 0
+                 and auto_timeout_button != '' }}
+        sequence:
+          - action: button.press
+            target:
+              entity_id: "{{ auto_timeout_button }}"
