@@ -34,9 +34,8 @@ BINARY_SENSORS: tuple[NeomowBinaryDescription, ...] = (
         icon="mdi:cog-sync",
         is_on_fn=lambda s: bool(s.get("ha_upgrading")),
     ),
-    # Error/alarm. NOTICE_ALARM tracking isn't ported yet, so this reflects the
-    # last STATUS only (no active fault by default). Exists so dashboards that
-    # gate on it have a real entity to bind to.
+    # Error/alarm — set by NOTICE_ALARM messages (coordinator._apply) and
+    # self-cleared by STATUS when ha_is_charging or ha_state == "mowing".
     NeomowBinaryDescription(
         key="error",
         device_class=BinarySensorDeviceClass.PROBLEM,
