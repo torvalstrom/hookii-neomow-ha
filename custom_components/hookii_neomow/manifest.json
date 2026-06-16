@@ -3,11 +3,11 @@
   "name": "Hookii Neomow Map",
   "codeowners": ["@torvalstrom"],
   "config_flow": true,
-  "dependencies": ["mqtt", "websocket_api", "http", "frontend"],
+  "dependencies": ["websocket_api", "http", "frontend"],
   "documentation": "https://github.com/torvalstrom/hookii-neomow-ha",
-  "integration_type": "service",
-  "iot_class": "local_push",
+  "integration_type": "hub",
+  "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/torvalstrom/hookii-neomow-ha/issues",
-  "requirements": [],
-  "version": "0.2.3"
+  "requirements": ["paho-mqtt>=1.6.1", "requests>=2.31.0"],
+  "version": "0.3.0"
 }

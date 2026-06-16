@@ -50,10 +50,17 @@ import requests
 
 _LOGGER = logging.getLogger(__name__)
 
-# Headers the Hookii Android app sends on EVERY request (login + post-auth).
-# `hookii-token` is the literal "Hookii " (trailing space) before login, then
-# "Hookii <JWT>" after. The other values are static app identifiers.
-HOOKII_AGENT = "okhttp/4.9.2"
+# Headers the Hookii Android app sends on EVERY request (login + post-auth),
+# reverse-engineered from pcap. Missing ANY of them -> the server rejects with
+# {"code":2,"msg":"hookii-agent参数错误","data":null}. Keep this byte-identical
+# to the add-on's bridge.py.
+#  - hookii-token: "Hookii " (trailing space) before login, "Hookii <JWT>" after.
+#  - hookii-agent: free-form "Android/<mfr> <model> <ver>/V<app>/<build>" - the
+#    prefix shape matters, the exact device less so.
+#  - app-time-zone-offset: minutes vs UTC.
+#  - user-agent: the Flutter Dart HTTP client default.
+HOOKII_USER_AGENT = "Dart/3.9 (dart:io)"
+HOOKII_AGENT = "Android/Xiaomi 25010PN30G 16/V1.1.0/189"
 HOOKII_APP_NAME = "Hookii App"
 HOOKII_APP_LANG = "en"
 
@@ -65,10 +72,16 @@ ENV_HOSTS = {
 }
 REST_PORT = 10443
 MQTT_PORT = 8883
-# Shared IoT broker creds (same for every account - auth is really carried by
-# the JWT inside the heartbeat, the username/password just open the socket).
+# Shared IoT broker creds baked into the Hookii app (auth is really carried by
+# the JWT inside the heartbeat - the username/password just open the socket, so
+# the same pair works for every user of an environment). Username is constant;
+# the password rotates per environment. Verified against a 2026-06-12 prod
+# capture. Same values the public hookii-bridge add-on ships.
 CLOUD_MQTT_USER = "hookii-iot"
-CLOUD_MQTT_PASS = "hookii-iot-2022"
+CLOUD_MQTT_PASS_BY_ENV = {
+    "beta": "ukLWdAbvRF3JVqNyTdAVJsMx",
+    "prod": "CaV4C4qHBQxwWI#GomA2zuI&D#MxyaMF",
+}
 
 # Heartbeat cadence the Android app uses (PCAP-confirmed 1.5s). The `push`
 # value is a FIXED per-session integer (observed 23), NOT a counter.
@@ -91,14 +104,27 @@ CMD_POLL_INTERVAL = 2.5
 CMD_POLL_TIMEOUT = 30.0
 
 
+def _tz_offset_minutes() -> int:
+    """Local timezone offset in minutes vs UTC."""
+    off = datetime.now().astimezone().utcoffset()
+    return int(off.total_seconds() // 60) if off else 0
+
+
 def hookii_headers(token: str = "") -> dict[str, str]:
-    """Standard Hookii request headers. `token` is the JWT (empty pre-login)."""
+    """Standard Hookii request headers. `token` is the JWT (empty pre-login).
+
+    Every field is required by the server (see the constants above); omitting
+    any returns code=2 "hookii-agent参数错误".
+    """
     return {
         "hookii-token": f"Hookii {token}" if token else "Hookii ",
-        "User-Agent": HOOKII_AGENT,
-        "appName": HOOKII_APP_NAME,
-        "lang": HOOKII_APP_LANG,
-        "Content-Type": "application/json; charset=utf-8",
+        "user-agent": HOOKII_USER_AGENT,
+        "hookii-agent": HOOKII_AGENT,
+        "accept-encoding": "gzip",
+        "app-time-zone-offset": str(_tz_offset_minutes()),
+        "content-type": "application/json",
+        "app-language": HOOKII_APP_LANG,
+        "app-name": HOOKII_APP_NAME,
     }
 
 
@@ -119,6 +145,10 @@ class HookiiConfig:
     def rest_base(self) -> str:
         return f"https://{self.host}:{REST_PORT}"
 
+    @property
+    def mqtt_pass(self) -> str:
+        return CLOUD_MQTT_PASS_BY_ENV.get(self.env, CLOUD_MQTT_PASS_BY_ENV["beta"])
+
 
 @dataclass
 class HookiiAccount:
@@ -134,9 +164,17 @@ class HookiiAuthError(RuntimeError):
     """Login failed (bad credentials, unexpected response shape)."""
 
 
+_HEX32 = __import__("re").compile(r"^[0-9a-fA-F]{32}$")
+
+
 def md5_upper(s: str) -> str:
+    """MD5(cleartext) upper-hex. If `s` already looks like a 32-hex digest,
+    treat it as pre-hashed and just upper-case it (so a user can store the
+    hash instead of the cleartext password)."""
     import hashlib
 
+    if _HEX32.match(s):
+        return s.upper()
     return hashlib.md5(s.encode("utf-8")).hexdigest().upper()
 
 
@@ -284,7 +322,7 @@ class HookiiCloudClient:
         self.cfg = cfg
         self.acct = acct
         self._on_telemetry = on_telemetry
-        self.client_id = f"Android_{acct.email}_{int(time.time() * 1000)}"
+        self.client_id = f"Android_{cfg.email}_{int(time.time() * 1000)}"
         self._stop = threading.Event()
         self._client: mqtt.Client | None = None
         self._hb_thread: threading.Thread | None = None
@@ -306,7 +344,7 @@ class HookiiCloudClient:
             protocol=mqtt.MQTTv311,
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         )
-        c.username_pw_set(CLOUD_MQTT_USER, CLOUD_MQTT_PASS)
+        c.username_pw_set(CLOUD_MQTT_USER, self.cfg.mqtt_pass)
         # Hookii's cloud broker uses a self-signed chain (same reason their app
         # needs reFlutter to bypass validation). Fixed known host -> accept.
         tls_ctx = ssl.create_default_context()

@@ -2,23 +2,28 @@
   "config": {
     "step": {
       "user": {
-        "title": "Hookii Neomow Map",
-        "description": "Reads the Hookii Bridge's map data off MQTT and serves it to the Neomow Map card. Make sure the MQTT integration is configured and the Hookii Bridge (add-on or container) is publishing.",
+        "title": "Hookii Neomow",
+        "description": "Sign in with your Hookii app account. The integration connects to the Hookii cloud directly - no add-on and no MQTT broker needed - and adds your mowers plus the live Neomow Map card.\n\nNote: Hookii allows only one active session per account, so while this integration runs the phone app may get signed out periodically.",
         "data": {
-          "topic_prefix": "MQTT topic prefix",
-          "mowers_spec": "Mowers (label:serial[:color]; one per mower, separated by ;)"
+          "email": "Hookii account email",
+          "password": "Hookii account password",
+          "env": "Cloud environment",
+          "serials": "Mower serial numbers (optional)"
         },
         "data_description": {
-          "topic_prefix": "The prefix the bridge republishes under. Leave as the default unless you changed it on the bridge.",
-          "mowers_spec": "Example: garden:HKX1EB100JD25010115:#22c55e;pond:HKX2EB100JD24080170"
+          "email": "The email you log into the Hookii app with.",
+          "password": "Your Hookii app password. Stored locally and only sent (MD5-hashed) to the Hookii cloud.",
+          "env": "Use 'beta' unless your account lives on the production cloud.",
+          "serials": "Only needed if no mowers are found automatically. Comma-separated, e.g. HKX1EB100JD25010115, HKX2EB100JD24080170. Find them in the Hookii app under each mower's details."
         }
       }
     },
     "error": {
-      "invalid_mowers": "Could not parse the mower list. Use label:serial[:color], separated by ;"
+      "auth": "Login failed. Check the email, password and cloud environment.",
+      "no_mowers": "Login succeeded but no mowers were found on this account."
     },
     "abort": {
-      "already_configured": "These mowers are already configured."
+      "already_configured": "This Hookii account is already configured."
     }
   }
 }
