@@ -4,11 +4,19 @@ from __future__ import annotations
 DOMAIN = "hookii_neomow"
 
 # Config-entry keys
-CONF_TOPIC_PREFIX = "topic_prefix"
+CONF_EMAIL = "email"            # Hookii account login
+CONF_PASSWORD = "password"      # Hookii account password (MD5'd before send)
+CONF_ENV = "env"                # "beta" | "prod" cloud environment
+CONF_SERIALS = "serials"        # manual serial fallback (login omits device list)
 CONF_MOWERS = "mowers"          # list of {serial, label, color}
 CONF_SERIAL = "serial"
 CONF_LABEL = "label"
 CONF_COLOR = "color"
+
+# Legacy (pre-2026-06-16, MQTT-bridge era) - kept so old entries still load.
+CONF_TOPIC_PREFIX = "topic_prefix"
+
+DEFAULT_ENV = "beta"
 
 # The bridge republishes per-serial under this prefix by default:
 #   <prefix>/<serial>  ->  {msgType: STATUS|DEVICE_MAP_V2|ALL_PATH_LIST_V2|...}

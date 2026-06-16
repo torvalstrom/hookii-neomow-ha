@@ -16,13 +16,22 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_MOWERS, CONF_TOPIC_PREFIX, DEFAULT_TOPIC_PREFIX, DOMAIN
+from homeassistant.exceptions import ConfigEntryNotReady
+
+from .api import HookiiAccount, HookiiAuthError, HookiiConfig, login
+from .const import CONF_EMAIL, CONF_ENV, CONF_MOWERS, CONF_PASSWORD, DEFAULT_ENV, DOMAIN
 from .coordinator import NeomowCoordinator
 from . import websocket
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = []
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.CAMERA,
+    Platform.LAWN_MOWER,
+    Platform.SENSOR,
+]
 
 # The Lovelace card ships bundled inside this integration. We serve it from a
 # static path and load it on the frontend so the user never has to install a
@@ -102,18 +111,35 @@ async def _async_register_resource(hass: HomeAssistant, url: str) -> None:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Hookii Neomow Map from a config entry."""
-    topic_prefix = entry.data.get(CONF_TOPIC_PREFIX, DEFAULT_TOPIC_PREFIX)
     mowers = entry.data.get(CONF_MOWERS, [])
     if not mowers:
         _LOGGER.error("config entry has no mowers configured")
         return False
 
-    coordinator = NeomowCoordinator(hass, entry.entry_id, topic_prefix, mowers)
+    cfg = HookiiConfig(
+        email=entry.data[CONF_EMAIL],
+        password=entry.data[CONF_PASSWORD],
+        env=entry.data.get(CONF_ENV, DEFAULT_ENV),
+    )
+    acct = HookiiAccount(label=entry.data[CONF_EMAIL])
+    # Fresh login on every setup: the JWT is short-lived and is needed by the
+    # cloud heartbeat. A transient failure -> retry via ConfigEntryNotReady.
+    try:
+        await hass.async_add_executor_job(login, cfg, acct)
+    except HookiiAuthError as err:
+        raise ConfigEntryNotReady(f"Hookii login failed: {err}") from err
+    # Prefer the serials discovered at login; fall back to the stored list.
+    if not acct.serials:
+        acct.serials = [m["serial"] for m in mowers]
+
+    coordinator = NeomowCoordinator(hass, entry.entry_id, cfg, acct, mowers)
     await coordinator.async_start()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     websocket.async_register(hass)
     await _async_register_card(hass)
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     entry.async_on_unload(entry.add_update_listener(_async_reload))
     return True
@@ -121,12 +147,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     coordinator: NeomowCoordinator | None = hass.data.get(DOMAIN, {}).pop(
         entry.entry_id, None
     )
     if coordinator is not None:
         await coordinator.async_stop()
-    return True
+    return unloaded
 
 
 async def _async_reload(hass: HomeAssistant, entry: ConfigEntry) -> None:

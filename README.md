@@ -1,113 +1,97 @@
-# Hookii Neomow Map — native Home Assistant card + integration
+# Hookii Neomow — native Home Assistant integration
 
-Live, native SVG map of your Hookii Neomow robot mower(s) in Home Assistant —
-**no iframe, no external service, works on every install type** (Home Assistant
-OS, Supervised, **Container/Docker**, Core).
+Control and monitor your Hookii Neomow robot mower(s) in Home Assistant, with a
+live SVG map — **no add-on, no MQTT broker, no external service.** Works on every
+install type (Home Assistant OS, Supervised, **Container/Docker**, Core).
 
-This is the v1.6 broad-support companion to the
-[Hookii Bridge add-on](https://github.com/torvalstrom/hookii-bridge-ha-addon).
-The bridge already auto-creates your mower entities (sensors, `lawn_mower`,
-buttons, camera) via MQTT Discovery. This repo adds the **map**:
+You sign in with your Hookii app account and the integration connects **directly
+to the Hookii cloud** (cloud-MQTT for live telemetry, HTTPS for control). It runs
+entirely inside HA Core, so there's nothing else to install or host.
 
-- **`custom_components/hookii_neomow/`** — a thin integration that subscribes to
-  the bridge's republished MQTT map payloads (`DEVICE_MAP_V2`,
-  `ALL_PATH_LIST_V2`, `ALL_PATH_INDEX_V2`, `STATUS`, `REGION_TASK`) and serves
-  the geometry to the card over Home Assistant's authenticated websocket. It
-  runs inside HA Core, so it needs no Supervisor and works on container installs.
-- **`custom_components/hookii_neomow/frontend/hookii-mower-map-card.js`** — a
-  dependency-free Lovelace card that renders the yard boundary, cut/transit
-  coverage, live trail and the mower's position + heading entirely client-side.
-  It ships **inside** the integration (served + auto-registered on setup), so
-  there is no second thing to install. No framework import, so it does not break
-  when Home Assistant bumps its frontend.
+> **v0.3.0 is a major change.** Earlier versions were only a *map* that consumed
+> MQTT data republished by the separate
+> [Hookii Bridge add-on](https://github.com/torvalstrom/hookii-bridge-ha-addon).
+> v0.3.0 absorbs that job: it talks to the Hookii cloud itself, so the add-on
+> and the HA MQTT broker are **no longer needed**. Upgrading? See
+> [Migrating](#migrating-from-the-mqtt-bridge-version).
 
-## Quick start (step by step)
+## What you get
 
-**Before you start** you need two things already working: the
-[**Hookii Bridge**](https://github.com/torvalstrom/hookii-bridge-ha-addon)
-(add-on on HAOS, or a container on Docker/Compose/k3s) publishing to your MQTT
-broker, and Home Assistant's **MQTT integration** connected to that broker. The
-bridge auto-creates your mower entities; this repo adds the map.
+Per mower (one device each):
 
-1. **Install HACS** if you don't have it yet — https://hacs.xyz (one-time, works
-   on every HA install type).
-2. **Add this repository to HACS:** HACS → ⋮ (top-right) → **Custom repositories**
-   → paste `https://github.com/torvalstrom/hookii-neomow-ha`, category
-   **Integration** → **Add**.
-3. **Download:** open the new *Hookii Neomow Map* entry → **Download** →
-   **Restart Home Assistant** when prompted.
-4. **Add the integration:** Settings → Devices & Services → **Add Integration**
-   → search **Hookii Neomow Map** → enter the MQTT topic prefix (default
-   `hookii/details/device`) and your mowers as `label:serial[:color]` separated
-   by `;` — e.g. `garden:HKX1EB100JD25010115:#22c55e;pond:HKX2EB100JD24080170`.
-5. **Add the card to a dashboard:** edit any dashboard → **Add card** → search
-   **Hookii Neomow Map** (or paste the YAML below). The card ships **inside** the
-   integration and is already registered — there is no second HACS item and no
-   Lovelace resource to add by hand.
+- **Live map card** — yard boundary, cut/transit coverage, live trail, and the
+  mower's position + heading, rendered client-side (dependency-free Lovelace
+  card, shipped inside the integration and auto-registered — nothing extra to
+  install).
+- **`lawn_mower` entity** — start / pause / return-to-dock, with live activity
+  (mowing / docked / returning).
+- **Sensors** — battery, blade RPM, charge current, work status, current region,
+  cut area, mowing coverage, efficiency, task progress, mowing height, and the
+  battery/blade/drive-motor temperatures. (Voltage, GPS satellites and firmware
+  version ship disabled-by-default as diagnostics.)
+- **Binary sensors** — firmware-upgrading, error/alarm.
+- **Buttons** — start, pause, return to dock, stop (keep/clear progress), clear
+  exception, and **camera snapshot**.
+- **Camera** — shows the latest on-demand snapshot (press the snapshot button;
+  the mower's camera must be awake — a docked mower usually declines).
 
-   ```yaml
-   type: custom:hookii-mower-map-card
-   mower: garden     # the label you configured (optional if only one mower)
-   rotate: 0         # 90/180/270 to match the orientation in the Hookii app
-   title: Garden
-   ```
+## Install
 
-The map appears as soon as the bridge streams the first data. Add one card per
-mower. Updates later flow through that single HACS item.
+1. **Install HACS** if you haven't — https://hacs.xyz (one-time, all install types).
+2. **Add this repo to HACS:** HACS → ⋮ → **Custom repositories** → paste
+   `https://github.com/torvalstrom/hookii-neomow-ha`, category **Integration** → **Add**.
+3. Open the new **Hookii Neomow** entry → **Download** → **Restart Home Assistant**.
+4. **Add the integration:** Settings → Devices & Services → **Add Integration** →
+   search **Hookii Neomow** → sign in:
+   - **Email / password** — your Hookii app login (the password is stored locally
+     and only sent, MD5-hashed, to the Hookii cloud).
+   - **Cloud environment** — `beta` for most accounts, `prod` if your account
+     lives on the production cloud.
+   - **Mower serial numbers** *(optional)* — only needed if no mowers are found
+     automatically. Comma-separated, e.g. `HKX1EB100JD25010115, HKX2EB100JD24080170`.
+     Find them in the Hookii app under each mower's details.
 
-> Don't have HACS yet, or prefer not to use it? You can also copy
-> `custom_components/hookii_neomow/` into your HA `config/custom_components/`
-> folder manually and restart — then continue from step 4.
+## Add the map to a dashboard
 
-## Why this exists
-
-The bridge's built-in map is served over **HA Ingress**, which only exists on
-HAOS/Supervised. Container users had to embed it via a raw URL (an external
-reference). This card renders the same map natively from entity-adjacent
-geometry, so **every** Home Assistant user gets the map with no reference and no
-security trade-off.
-
-## Card options
-
-| Option | Default | Description |
-|---|---|---|
-| `mower` | first configured | The mower **label** to show (from the integration config). Optional if you only configured one mower. |
-| `rotate` | `0` | Degrees counter-clockwise. Set to `90`/`180`/`270` so the map matches the orientation you see in the Hookii app. |
-| `title` | — | Optional card header. |
-| `aspect_ratio` | `1.4` | Width-to-height ratio of the map area. |
-
-Add one card per mower. Example for a multi-mower setup:
+The card is registered automatically. Add a card of type
+`custom:hookii-mower-map-card`. Options (all optional):
 
 ```yaml
 type: custom:hookii-mower-map-card
-mower: greenhouse
-title: Greenhouse
-rotate: 90
+title: Neomow Map
+mower: "Neomow 080170"   # omit to show the first mower; matches the device name
+rotate: 0                # degrees, to match your yard's orientation
+aspect_ratio: "1.4"
 ```
 
-## What the map shows
+## Important: single Hookii session
 
-- **Yard boundary** (translucent green) once the cloud has streamed `DEVICE_MAP_V2`
-  (can take minutes to hours after a mower first comes online), plus any
-  **exclusion zones** (dark).
-- **Coverage**: thick green where the mower **cut**, thin light-green for
-  **transit** (moving without cutting).
-- The **live trail** in the mower's colour and the **robot** itself with a
-  heading arrow.
-- A **docked or offline mower** still shows its yard + coverage — just without
-  the live robot marker (so the map is useful even when the mower is parked).
+The Hookii cloud allows **one active session per account**. While this
+integration is connected it holds that session, so the **Hookii phone app may get
+signed out periodically** (and vice-versa). This is inherent to the Hookii cloud,
+not a bug. Use a dedicated/secondary Hookii account if that's a problem.
 
-The boundary + path captures are persisted, so an HA restart does not blank the
-map while it waits for the next cloud stream.
+## Migrating from the MQTT-bridge version
 
-## Troubleshooting
+v0.3.0 no longer reads MQTT. After updating:
 
-- **"Custom element doesn't exist: hookii-mower-map-card"** — fully close and
-  reopen the app (or hard-refresh the browser) after installing/updating, so the
-  bundled card is fetched.
-- **Map says "Waiting for map data…"** — the bridge isn't publishing yet, or the
-  topic prefix / mower serial don't match what the bridge uses. Check the bridge
-  is running and that the MQTT integration is connected.
-- **Map looks rotated wrong** — set `rotate` on the card to `90`, `180` or `270`.
-- **Migrating from the old iframe map** (`neomow.cscloud.dk` / the bridge's
-  Ingress page) — replace those `iframe`/`picture` cards with this card.
+1. Remove the old config entry (it used an MQTT topic prefix) and **re-add** the
+   integration with your Hookii login as above.
+2. You can **stop/remove the Hookii Bridge add-on** and the dedicated MQTT broker
+   — they're no longer used. (Keep MQTT if other integrations need it.)
+3. Entity IDs change (they're now per-mower native entities). Update any
+   dashboards/automations that referenced the old MQTT-discovered entities.
+
+## How it works
+
+- **Telemetry:** a per-account client connects to the Hookii cloud MQTT broker
+  (TLS) and a session heartbeat keeps it streaming STATUS / DEVICE_MAP_V2 /
+  ALL_PATH_LIST_V2 / ALL_PATH_INDEX_V2 / REGION_TASK, which become entities + map
+  geometry (served to the card over HA's authenticated websocket).
+- **Control:** commands (start/pause/dock/stop/recover/snapshot) go over HTTPS to
+  the Hookii cloud REST API.
+- Bundled `paho-mqtt` + `requests`; nothing host-specific, so it runs on Core /
+  Container the same as HAOS.
+
+Reverse-engineered, unofficial, and not affiliated with Hookii. Use at your own
+risk.
