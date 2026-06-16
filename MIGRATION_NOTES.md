@@ -81,6 +81,41 @@ all from the cloud. `lawn_mower.neomow_080190` = mowing, battery 50%, blade
   long-lived token. (The canonical token file is structured: read the
   `HA_TOKEN=` line, not the whole file.)
 
+## Live-test gotchas (round 2)
+
+- **Frozen entities / "data not streaming" (the big one):** the cloud client
+  mutated ONE persistent STATUS dict per mower, and `normalise_status` fans
+  chassisData/taskInfo out with `setdefault` — so on a persistent accumulator
+  every derived/fanned field froze after the first message (last_updated never
+  advanced; 0 state_changed despite the cloud streaming + dispatcher firing).
+  Fix: normalise each message's FRESH raw STATUS in the client, then merge the
+  normalised non-null fields into the accumulator in the coordinator
+  (assignment-merge, NOT setdefault). Diagnose with a `state_changed`
+  subscription, not just the WS geometry (the card re-reads live state on every
+  subscribe, so it looks fine even when entities are frozen).
+- **Entity-id stickiness:** HA derives entity_id from the entity NAME on first
+  registration and never changes it. So `blade_rpm` (translation "Blade RPM")
+  that first shipped as "Blade speed" stays `..._blade_speed`. Plan names up
+  front; a 1:1 dashboard remap therefore needs an explicit old->new id map
+  (suffixes differ: his `temp_battery` vs our `battery_temp`).
+- **Camera:** on-demand only (the mower photographs when asked). A docked mower
+  returns no image ("cloud declined" — camera asleep); an active mower returns a
+  real JPG. Don't auto-poll `async_camera_image` (would spam captures).
+- **Config-reload + single session:** reloading the entry (vs full HA restart)
+  can leave the old paho client briefly holding the one cloud session, starving
+  the new client. Full restart is clean. Harden `async_stop` (join the heartbeat
+  thread) if reload-in-place is needed.
+
+## 1:1 dashboard migration (preview at /tors-preview)
+
+Rebuilt the operator's real `tors-dashboard` (a `sections` view) onto the native
+entities by remapping entity_ids in the saved Lovelace config + patching the map
+card's `mower:` label filter. 48/51 entities map cleanly. The 3 that don't are
+the operator's OWN HA template sensors (ETA, total area, Ah-consumption) built on
+top of the bridge data — they need their base-entity refs repointed in the
+operator's config, or to be rebuilt as native sensors. This is the only real
+parity gap.
+
 ## Still open
 
 - Per-mower friendly names in the config flow (vs `Neomow <last6>`).
