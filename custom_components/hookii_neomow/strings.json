@@ -41,7 +41,10 @@
       "temp_battery": { "name": "Battery temp" },
       "temp_blade_motor": { "name": "Blade motor temp" },
       "temp_motor_left": { "name": "Left motor temp" },
-      "temp_motor_right": { "name": "Right motor temp" }
+      "temp_motor_right": { "name": "Right motor temp" },
+      "voltage": { "name": "Voltage" },
+      "satellites": { "name": "GPS satellites" },
+      "firmware": { "name": "Firmware version" }
     },
     "binary_sensor": {
       "upgrading": { "name": "Firmware upgrading" }
@@ -51,7 +54,12 @@
       "pause": { "name": "Pause" },
       "dock": { "name": "Return to dock" },
       "stop_keep": { "name": "Stop (keep progress)" },
-      "stop_clear": { "name": "Stop (clear progress)" }
+      "stop_clear": { "name": "Stop (clear progress)" },
+      "recover_alarm": { "name": "Clear exception" },
+      "snapshot": { "name": "Camera snapshot" }
+    },
+    "camera": {
+      "snapshot": { "name": "Last snapshot" }
     }
   }
 }

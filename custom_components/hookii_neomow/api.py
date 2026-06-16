@@ -306,6 +306,68 @@ def _cmd_start_stop_polled(
     return last
 
 
+def _capture_snapshot(cfg: HookiiConfig, acct: HookiiAccount, serial: str, model: str) -> bytes | None:
+    """Trigger an on-demand camera snapshot and return the JPG bytes (or None).
+
+    Two-step (PCAP-confirmed): POST /mower/capture/image -> {result, fileUrl};
+    then GET fileUrl (a short-lived CDN URL on a different port) for the JPG."""
+    data = _post(cfg, acct, "/api/v1/mower/capture/image",
+                 {"serialNumber": serial, "modelCode": model})
+    if not data or not data.get("result"):
+        _LOGGER.info("[%s] snapshot declined: %s", acct.label, data)
+        return None
+    file_url = data.get("fileUrl")
+    if not file_url:
+        return None
+    try:
+        r = requests.get(file_url, headers=hookii_headers(acct.jwt), timeout=20, verify=False)
+        return r.content if r.status_code == 200 else None
+    except requests.RequestException:
+        _LOGGER.exception("[%s] snapshot download failed", acct.label)
+        return None
+
+
+def _cmd_recover_alarm(cfg: HookiiConfig, acct: HookiiAccount, serial: str, model: str) -> dict:
+    """Self-heal a remote-recoverable exception (e.g. docking failure 515).
+    reqOprType 0 then poll 1 until the server returns code=61 (= done)."""
+    body_base = {"serialNumber": serial, "modelCode": model, "response": None}
+
+    def call(opr: int):
+        url = f"{cfg.rest_base}/api/v1/mower/remote/recovery/alarm"
+        for attempt in (1, 2):
+            try:
+                r = requests.post(url, json={**body_base, "reqOprType": opr},
+                                  headers=hookii_headers(acct.jwt), timeout=20, verify=False)
+            except requests.RequestException:
+                return None, {}
+            if r.status_code == 401 and attempt == 1:
+                try: login(cfg, acct)
+                except HookiiAuthError: return None, {}
+                continue
+            try: env = r.json()
+            except ValueError: return None, {}
+            code = env.get("code") if isinstance(env, dict) else None
+            if code == 10 and attempt == 1:
+                try: login(cfg, acct)
+                except HookiiAuthError: return None, {}
+                continue
+            return code, (env.get("data") if isinstance(env, dict) else {}) or {}
+        return None, {}
+
+    code, data = call(0)
+    if code == 61:
+        return {"completed": True}
+    deadline = time.time() + CMD_POLL_TIMEOUT
+    while time.time() < deadline:
+        time.sleep(CMD_POLL_INTERVAL)
+        code, data = call(1)
+        if code == 61:
+            return {"completed": True}
+        if code not in (0, 1):
+            return data
+    return data
+
+
 class HookiiCloudClient:
     """Cloud-MQTT telemetry subscriber + REST command sender for one account.
 
@@ -479,6 +541,8 @@ class HookiiCloudClient:
                 _cmd_start_stop_polled(self.cfg, self.acct, serial, model, 2)
             elif action == "stop_clear":
                 _cmd_start_stop_polled(self.cfg, self.acct, serial, model, 8)
+            elif action == "recover_alarm":
+                _cmd_recover_alarm(self.cfg, self.acct, serial, model)
             else:
                 _LOGGER.warning("[%s] unknown action %r", self.acct.label, action)
                 return False
@@ -486,6 +550,10 @@ class HookiiCloudClient:
             _LOGGER.exception("[%s] action %s failed", self.acct.label, action)
             return False
         return True
+
+    def capture_snapshot(self, serial: str) -> bytes | None:
+        """Trigger + fetch an on-demand camera snapshot (synchronous REST)."""
+        return _capture_snapshot(self.cfg, self.acct, serial, self.model_for(serial))
 
 
 def _now_iso() -> str:

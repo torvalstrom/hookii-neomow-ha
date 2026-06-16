@@ -123,6 +123,21 @@ SENSORS: tuple[NeomowSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT, entity_category=DIAG,
         value_fn=_num("rightDriveMotorTemp")),
+    # Extras (full add-on parity)
+    NeomowSensorDescription(
+        key="voltage", translation_key="voltage",
+        device_class=SensorDeviceClass.VOLTAGE,
+        native_unit_of_measurement="V", state_class=SensorStateClass.MEASUREMENT,
+        entity_category=DIAG, entity_registry_enabled_default=False,
+        value_fn=_num("voltage")),
+    NeomowSensorDescription(
+        key="satellites", translation_key="satellites", icon="mdi:satellite-variant",
+        state_class=SensorStateClass.MEASUREMENT, entity_category=DIAG,
+        entity_registry_enabled_default=False, value_fn=_num("satellite")),
+    NeomowSensorDescription(
+        key="firmware", translation_key="firmware", icon="mdi:chip",
+        entity_category=DIAG, entity_registry_enabled_default=False,
+        value_fn=_v("version")),
 )
 
 

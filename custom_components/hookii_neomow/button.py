@@ -1,4 +1,4 @@
-"""Command buttons for Hookii Neomow (start / pause / dock / stop)."""
+"""Command buttons for Hookii Neomow (movement + recover + snapshot)."""
 from __future__ import annotations
 
 import logging
@@ -14,13 +14,15 @@ from .entity import NeomowEntity
 
 _LOGGER = logging.getLogger(__name__)
 
-# (entity key, action passed to cloud client, icon)
+# (entity key, action, icon)
 BUTTONS: tuple[tuple[str, str, str], ...] = (
     ("start", "start", "mdi:play"),
     ("pause", "pause", "mdi:pause"),
     ("dock", "dock", "mdi:home-import-outline"),
     ("stop_keep", "stop_keep", "mdi:stop"),
     ("stop_clear", "stop_clear", "mdi:stop-circle-outline"),
+    ("recover_alarm", "recover_alarm", "mdi:auto-fix"),
+    ("snapshot", "snapshot", "mdi:camera"),
 )
 
 
@@ -50,6 +52,17 @@ class NeomowButton(NeomowEntity, ButtonEntity):
         client = self.coordinator.client
         if client is None:
             _LOGGER.warning("cloud client not ready; dropping '%s'", self._action)
+            return
+        if self._action == "snapshot":
+            # Capture is a REST round-trip that returns the JPG; store it on the
+            # mower so the camera entity shows it.
+            data = await self.hass.async_add_executor_job(
+                client.capture_snapshot, self._state.serial
+            )
+            if data:
+                self.coordinator.set_snapshot(self.label, data)
+            else:
+                _LOGGER.info("snapshot for %s declined by cloud", self.label)
             return
         await self.hass.async_add_executor_job(
             client.send_action, self._action, self._state.serial

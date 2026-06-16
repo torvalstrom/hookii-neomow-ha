@@ -66,6 +66,9 @@ class MowerState:
         self.path_list_at: str | None = None
         self.path_index_at: str | None = None
         self.trail: deque[list[int]] = deque(maxlen=TRAIL_MAX)
+        # Last on-demand camera snapshot (set by the snapshot button/camera).
+        self.snapshot: bytes | None = None
+        self.snapshot_at: str | None = None
 
     def geometry(self) -> dict[str, Any]:
         """Assemble the raw-coordinate geometry snapshot for the card."""
@@ -144,6 +147,17 @@ class NeomowCoordinator:
     @property
     def client(self) -> HookiiCloudClient | None:
         return self._client
+
+    def set_snapshot(self, label: str, data: bytes) -> None:
+        """Store a freshly captured camera image and notify the camera entity."""
+        state = self.mowers.get(label)
+        if state is None:
+            return
+        state.snapshot = data
+        state.snapshot_at = _now_iso()
+        async_dispatcher_send(
+            self.hass, f"{SIGNAL_MOWER_UPDATED}_{self.entry_id}", label
+        )
 
     def _load_persisted(self) -> None:
         for label, state in self.mowers.items():
@@ -229,6 +243,20 @@ class NeomowCoordinator:
                 or abs(state.trail[-1][1] - parsed["y"]) > TRAIL_MIN_MOVE_CM
             ):
                 state.trail.append([parsed["x"], parsed["y"]])
+            # Self-clear a docking/obstacle alarm once the mower is clearly OK
+            # again (charging at dock, or actively mowing).
+            if state.status.get("ha_alarm_active") and (
+                state.status.get("ha_is_charging") or state.status.get("ha_state") == "mowing"
+            ):
+                state.status["ha_alarm_active"] = False
+                state.status["ha_alarm_code"] = None
+            return True
+
+        if msg_type == "NOTICE_ALARM":
+            na = payload.get("data", {}).get("NOTICE_ALARM", {})
+            err = na.get("errCode") if isinstance(na, dict) else None
+            state.status["ha_alarm_active"] = bool(err)
+            state.status["ha_alarm_code"] = err
             return True
 
         if msg_type == "DEVICE_MAP_V2":
