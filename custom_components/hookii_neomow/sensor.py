@@ -55,29 +55,31 @@ SENSORS: tuple[NeomowSensorDescription, ...] = (
     NeomowSensorDescription(
         key="battery", device_class=SensorDeviceClass.BATTERY,
         native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT,
-        value_fn=_num("electricity")),
+        suggested_display_precision=0, value_fn=_num("electricity")),
     NeomowSensorDescription(
         key="blade_rpm", translation_key="blade_rpm", icon="mdi:saw-blade",
         native_unit_of_measurement=REVOLUTIONS_PER_MINUTE,
-        state_class=SensorStateClass.MEASUREMENT, value_fn=_num("knifeDiscMotorSpeed")),
+        state_class=SensorStateClass.MEASUREMENT, suggested_display_precision=0,
+        value_fn=_num("knifeDiscMotorSpeed")),
     NeomowSensorDescription(
         key="charge_current", translation_key="charge_current",
         device_class=SensorDeviceClass.CURRENT,
         native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
         state_class=SensorStateClass.MEASUREMENT, entity_category=DIAG,
-        value_fn=_num("chargeCurrent")),
+        suggested_display_precision=1, value_fn=_num("chargeCurrent")),
     NeomowSensorDescription(
         key="work_status", translation_key="work_status", icon="mdi:robot-mower",
         value_fn=_v("workStatus")),
     NeomowSensorDescription(
         key="wifi_signal", translation_key="wifi_signal", icon="mdi:wifi",
         native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT,
-        entity_category=DIAG, value_fn=_num("wifiSignal")),
+        entity_category=DIAG, suggested_display_precision=0, value_fn=_num("wifiSignal")),
     NeomowSensorDescription(
         key="mowing_height", translation_key="mowing_height", icon="mdi:height",
         device_class=SensorDeviceClass.DISTANCE,
         native_unit_of_measurement=UnitOfLength.MILLIMETERS,
-        state_class=SensorStateClass.MEASUREMENT, value_fn=_num("mowingHeight")),
+        state_class=SensorStateClass.MEASUREMENT, suggested_display_precision=0,
+        value_fn=_num("mowingHeight")),
     # taskInfo-derived (fanned out by normalise_status)
     NeomowSensorDescription(
         key="current_region", translation_key="current_region", icon="mdi:map-marker",
@@ -85,55 +87,56 @@ SENSORS: tuple[NeomowSensorDescription, ...] = (
     NeomowSensorDescription(
         key="cut_area", translation_key="cut_area", icon="mdi:grass",
         native_unit_of_measurement="m²", state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda s: s.get("mowedArea", s.get("cutArea"))),
+        suggested_display_precision=1, value_fn=lambda s: s.get("mowedArea", s.get("cutArea"))),
     NeomowSensorDescription(
         key="mowing_coverage", translation_key="mowing_coverage",
         native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT,
-        value_fn=_num("mowingCoverage")),
+        suggested_display_precision=1, value_fn=_num("mowingCoverage")),
     NeomowSensorDescription(
         key="efficiency", translation_key="efficiency", icon="mdi:speedometer",
         native_unit_of_measurement="m²/h", state_class=SensorStateClass.MEASUREMENT,
-        value_fn=_num("mowingEfficiency")),
+        suggested_display_precision=1, value_fn=_num("mowingEfficiency")),
     NeomowSensorDescription(
         key="task_progress", translation_key="task_progress", icon="mdi:progress-check",
         native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT,
-        value_fn=_num("taskProgress")),
+        suggested_display_precision=1, value_fn=_num("taskProgress")),
     # Temperatures
     NeomowSensorDescription(
         key="temp_battery", translation_key="temp_battery",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT, entity_category=DIAG,
-        value_fn=_num("batteryTemp")),
+        suggested_display_precision=1, value_fn=_num("batteryTemp")),
     NeomowSensorDescription(
         key="temp_blade_motor", translation_key="temp_blade_motor",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT, entity_category=DIAG,
-        value_fn=_num("knifeDiscMotorTemp")),
+        suggested_display_precision=1, value_fn=_num("knifeDiscMotorTemp")),
     NeomowSensorDescription(
         key="temp_motor_left", translation_key="temp_motor_left",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT, entity_category=DIAG,
-        value_fn=_num("leftDriveMotorTemp")),
+        suggested_display_precision=1, value_fn=_num("leftDriveMotorTemp")),
     NeomowSensorDescription(
         key="temp_motor_right", translation_key="temp_motor_right",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT, entity_category=DIAG,
-        value_fn=_num("rightDriveMotorTemp")),
+        suggested_display_precision=1, value_fn=_num("rightDriveMotorTemp")),
     # Extras (full add-on parity)
     NeomowSensorDescription(
         key="voltage", translation_key="voltage",
         device_class=SensorDeviceClass.VOLTAGE,
         native_unit_of_measurement="V", state_class=SensorStateClass.MEASUREMENT,
         entity_category=DIAG, entity_registry_enabled_default=False,
-        value_fn=_num("voltage")),
+        suggested_display_precision=1, value_fn=_num("voltage")),
     NeomowSensorDescription(
         key="satellites", translation_key="satellites", icon="mdi:satellite-variant",
         state_class=SensorStateClass.MEASUREMENT, entity_category=DIAG,
-        entity_registry_enabled_default=False, value_fn=_num("satellite")),
+        entity_registry_enabled_default=False, suggested_display_precision=0,
+        value_fn=_num("satellite")),
     NeomowSensorDescription(
         key="firmware", translation_key="firmware", icon="mdi:chip",
         entity_category=DIAG, entity_registry_enabled_default=False,
