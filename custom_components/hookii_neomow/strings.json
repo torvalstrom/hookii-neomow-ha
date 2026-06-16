@@ -28,8 +28,30 @@
   },
   "entity": {
     "sensor": {
-      "blade_rpm": { "name": "Blade speed" },
-      "mowing_coverage": { "name": "Mowing coverage" }
+      "blade_rpm": { "name": "Blade RPM" },
+      "charge_current": { "name": "Charge current" },
+      "work_status": { "name": "Work status" },
+      "wifi_signal": { "name": "WiFi signal" },
+      "mowing_height": { "name": "Mowing height" },
+      "current_region": { "name": "Current region" },
+      "cut_area": { "name": "Cut area" },
+      "mowing_coverage": { "name": "Mowing coverage" },
+      "efficiency": { "name": "Efficiency" },
+      "task_progress": { "name": "Task progress" },
+      "temp_battery": { "name": "Battery temp" },
+      "temp_blade_motor": { "name": "Blade motor temp" },
+      "temp_motor_left": { "name": "Left motor temp" },
+      "temp_motor_right": { "name": "Right motor temp" }
+    },
+    "binary_sensor": {
+      "upgrading": { "name": "Firmware upgrading" }
+    },
+    "button": {
+      "start": { "name": "Start" },
+      "pause": { "name": "Pause" },
+      "dock": { "name": "Return to dock" },
+      "stop_keep": { "name": "Stop (keep progress)" },
+      "stop_clear": { "name": "Stop (clear progress)" }
     }
   }
 }

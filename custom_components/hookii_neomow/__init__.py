@@ -25,7 +25,12 @@ from . import websocket
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.LAWN_MOWER, Platform.SENSOR]
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.LAWN_MOWER,
+    Platform.SENSOR,
+]
 
 # The Lovelace card ships bundled inside this integration. We serve it from a
 # static path and load it on the frontend so the user never has to install a

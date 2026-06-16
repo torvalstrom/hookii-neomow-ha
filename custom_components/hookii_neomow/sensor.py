@@ -1,4 +1,9 @@
-"""Sensor entities for Hookii Neomow (battery + telemetry)."""
+"""Sensor entities for Hookii Neomow (battery + telemetry).
+
+Field set + entity-key suffixes mirror the add-on's MQTT-discovery sensors so a
+dashboard built on the add-on remaps to the native entities by just swapping the
+device prefix. All values come from the (normalised) STATUS payload.
+"""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -12,7 +17,14 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, EntityCategory, REVOLUTIONS_PER_MINUTE
+from homeassistant.const import (
+    PERCENTAGE,
+    EntityCategory,
+    REVOLUTIONS_PER_MINUTE,
+    UnitOfElectricCurrent,
+    UnitOfLength,
+    UnitOfTemperature,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -20,51 +32,97 @@ from .const import DOMAIN
 from .coordinator import NeomowCoordinator
 from .entity import NeomowEntity
 
+DIAG = EntityCategory.DIAGNOSTIC
+
 
 @dataclass(frozen=True, kw_only=True)
 class NeomowSensorDescription(SensorEntityDescription):
-    """A sensor described by how to pull its value out of the STATUS dict."""
-
     value_fn: Callable[[dict[str, Any]], Any]
 
 
-def _num(status: dict[str, Any], key: str) -> Any:
-    v = status.get(key)
-    return v if isinstance(v, (int, float)) else None
+def _v(key: str) -> Callable[[dict[str, Any]], Any]:
+    return lambda s: s.get(key)
+
+
+def _num(key: str) -> Callable[[dict[str, Any]], Any]:
+    def fn(s: dict[str, Any]) -> Any:
+        x = s.get(key)
+        return x if isinstance(x, (int, float)) else None
+    return fn
 
 
 SENSORS: tuple[NeomowSensorDescription, ...] = (
     NeomowSensorDescription(
-        key="battery",
-        device_class=SensorDeviceClass.BATTERY,
-        native_unit_of_measurement=PERCENTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda s: _num(s, "electricity"),
-    ),
+        key="battery", device_class=SensorDeviceClass.BATTERY,
+        native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_num("electricity")),
     NeomowSensorDescription(
-        key="blade_rpm",
-        translation_key="blade_rpm",
+        key="blade_rpm", translation_key="blade_rpm", icon="mdi:saw-blade",
         native_unit_of_measurement=REVOLUTIONS_PER_MINUTE,
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda s: _num(s, "knifeDiscMotorSpeed"),
-    ),
+        state_class=SensorStateClass.MEASUREMENT, value_fn=_num("knifeDiscMotorSpeed")),
     NeomowSensorDescription(
-        key="wifi_signal",
-        device_class=SensorDeviceClass.SIGNAL_STRENGTH,
-        native_unit_of_measurement="dBm",
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
-        value_fn=lambda s: _num(s, "wifiSignal"),
-    ),
+        key="charge_current", translation_key="charge_current",
+        device_class=SensorDeviceClass.CURRENT,
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        state_class=SensorStateClass.MEASUREMENT, entity_category=DIAG,
+        value_fn=_num("chargeCurrent")),
     NeomowSensorDescription(
-        key="mowing_coverage",
-        translation_key="mowing_coverage",
-        native_unit_of_measurement=PERCENTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda s: _num(s, "mowingCoverage"),
-    ),
+        key="work_status", translation_key="work_status", icon="mdi:robot-mower",
+        value_fn=_v("workStatus")),
+    NeomowSensorDescription(
+        key="wifi_signal", translation_key="wifi_signal", icon="mdi:wifi",
+        native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT,
+        entity_category=DIAG, value_fn=_num("wifiSignal")),
+    NeomowSensorDescription(
+        key="mowing_height", translation_key="mowing_height", icon="mdi:height",
+        device_class=SensorDeviceClass.DISTANCE,
+        native_unit_of_measurement=UnitOfLength.MILLIMETERS,
+        state_class=SensorStateClass.MEASUREMENT, value_fn=_num("mowingHeight")),
+    # taskInfo-derived (fanned out by normalise_status)
+    NeomowSensorDescription(
+        key="current_region", translation_key="current_region", icon="mdi:map-marker",
+        value_fn=_v("regionName")),
+    NeomowSensorDescription(
+        key="cut_area", translation_key="cut_area", icon="mdi:grass",
+        native_unit_of_measurement="m²", state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda s: s.get("mowedArea", s.get("cutArea"))),
+    NeomowSensorDescription(
+        key="mowing_coverage", translation_key="mowing_coverage",
+        native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_num("mowingCoverage")),
+    NeomowSensorDescription(
+        key="efficiency", translation_key="efficiency", icon="mdi:speedometer",
+        native_unit_of_measurement="m²/h", state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_num("mowingEfficiency")),
+    NeomowSensorDescription(
+        key="task_progress", translation_key="task_progress", icon="mdi:progress-check",
+        native_unit_of_measurement=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_num("taskProgress")),
+    # Temperatures
+    NeomowSensorDescription(
+        key="temp_battery", translation_key="temp_battery",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT, entity_category=DIAG,
+        value_fn=_num("batteryTemp")),
+    NeomowSensorDescription(
+        key="temp_blade_motor", translation_key="temp_blade_motor",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT, entity_category=DIAG,
+        value_fn=_num("knifeDiscMotorTemp")),
+    NeomowSensorDescription(
+        key="temp_motor_left", translation_key="temp_motor_left",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT, entity_category=DIAG,
+        value_fn=_num("leftDriveMotorTemp")),
+    NeomowSensorDescription(
+        key="temp_motor_right", translation_key="temp_motor_right",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT, entity_category=DIAG,
+        value_fn=_num("rightDriveMotorTemp")),
 )
 
 
@@ -80,8 +138,6 @@ async def async_setup_entry(
 
 
 class NeomowSensor(NeomowEntity, SensorEntity):
-    """A single telemetry value off the mower's STATUS payload."""
-
     entity_description: NeomowSensorDescription
 
     def __init__(
