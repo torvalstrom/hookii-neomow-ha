@@ -1,6 +1,6 @@
 {
   "domain": "hookii_neomow",
-  "name": "Hookii Neomow Map",
+  "name": "Hookii Neomow",
   "codeowners": ["@torvalstrom"],
   "config_flow": true,
   "dependencies": ["websocket_api", "http", "frontend"],
