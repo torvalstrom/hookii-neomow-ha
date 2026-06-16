@@ -100,7 +100,7 @@ blueprint:
       name: Problem binary sensor
       description: >-
         The integration's Problem binary sensor (e.g.
-        `binary_sensor.neomow_error`). Goes `on` whenever the Hookii
+        `binary_sensor.neomow_problem`). Goes `on` whenever the Hookii
         cloud sends a `NOTICE_ALARM` with any `errCode` — including `514`
         / `515` (docking failed) and `116` (obstacle at charging station).
         Automatically clears once the mower is charging or mowing again.
@@ -116,7 +116,7 @@ blueprint:
       name: Clear Exception button
       description: >-
         The integration's **Clear Exception** button (e.g.
-        `button.neomow_recover_alarm`). Pressing it sends the
+        `button.neomow_clear_exception`). Pressing it sends the
         `recover_alarm` command to the Hookii cloud — identical to tapping
         "OK to resolve" in the Hookii mobile app.
       selector:
@@ -129,7 +129,7 @@ blueprint:
       name: Return to Dock button
       description: >-
         The integration's **Return to Dock** button (e.g.
-        `button.neomow_dock`). Pressing it sends the mower back
+        `button.neomow_return_to_dock`). Pressing it sends the mower back
         to the dock — identical to the mobile app's "Recharge" button. Used
         for the kissing-dock recovery (Path B).
       selector:
