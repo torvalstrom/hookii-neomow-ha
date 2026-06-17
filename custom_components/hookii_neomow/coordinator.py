@@ -214,6 +214,11 @@ class NeomowCoordinator:
     def _apply(self, state: MowerState, payload: dict[str, Any]) -> bool:
         """Update one mower from a decoded payload. Returns True if changed."""
         msg_type = payload.get("msgType", "?")
+        # Diagnostic: which cloud message types actually reach this account.
+        # STATUS streams continuously; the map/path captures are rare + slow,
+        # so "Waiting for map data" is ambiguous without this. Enable via
+        #   logger: {logs: {custom_components.hookii_neomow: debug}}
+        _LOGGER.debug("[%s] inbound cloud msg: %s", state.label, msg_type)
 
         if msg_type == "STATUS":
             # The cloud client already normalised this message's raw STATUS.
@@ -260,6 +265,15 @@ class NeomowCoordinator:
             return True
 
         if msg_type == "DEVICE_MAP_V2":
+            if state.device_map_at is None:
+                # One-time, default-level: lets a user confirm the map boundary
+                # actually arrived (vs the card's "Waiting for map data") without
+                # turning on debug logging. The map is pushed rarely + slowly, so
+                # this can lag the first telemetry by minutes-to-hours.
+                _LOGGER.info(
+                    "[%s] first DEVICE_MAP_V2 received - map boundary now available",
+                    state.label,
+                )
             state.device_map = payload
             state.device_map_at = _now_iso()
             self._schedule_persist(state.label, "DEVICE_MAP_V2", payload)
