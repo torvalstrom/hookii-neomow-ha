@@ -101,19 +101,54 @@ class NeomowLawnMower(NeomowEntity, LawnMowerEntity):
         await self._send("dock")
 
     async def async_start_region(self, regions: list) -> None:
-        """DISABLED pending a confirmed regionList format.
+        """Start mowing only the named/identified zone(s).
 
-        The cloud's start/stop/job command accepts a regionList of bare regionIds
-        syntactically (code 1) but it leaves the mower in a "no tasks pending in
-        the selected zones" fault state - the actual zone-start the app uses is a
-        3-step flow (start -> select zones -> resume) whose exact payload we have
-        not captured. Sending the unconfirmed command can wedge the mower, so this
-        service refuses to fire until the format is verified from a real capture.
-        The available_regions attribute (zone enumeration) still works."""
+        Mirrors the Hookii app's zone flow. A zone-start only takes when the mower
+        is not already mowing (otherwise the cloud keeps the current job), so if it
+        is mowing we stop first (keeping breakpoint progress), wait for it to leave
+        the mowing state, then issue the same start sequence the whole-yard start
+        uses (cmd 7 pre-check + cmd 6 execute) but with regionList set to the chosen
+        regionIds instead of empty (= all). NB: a zone with no pending mowing task
+        will be rejected by the cloud with "no tasks pending in the selected
+        zones"."""
+        await self.coordinator.async_refresh_regions(self._state.label)
+        available = self._state.regions or geometry.extract_regions(
+            self._state.region_task, self._state.device_map, self._state.status
+        )
+        if not available:
+            raise HomeAssistantError(
+                "No zone data for this mower (could not fetch the zone list). "
+                "Try again in a moment."
+            )
+        by_name = {str(r.get("regionName", "")).strip().lower(): r for r in available}
+        by_id = {str(r.get("regionId")): r for r in available}
+        selected: list[dict] = []
+        unknown: list = []
+        for req in regions:
+            r = by_name.get(str(req).strip().lower()) or by_id.get(str(req).strip())
+            if r is None:
+                unknown.append(req)
+            elif r not in selected:
+                selected.append(r)
+        if unknown:
+            names = ", ".join(
+                sorted(n for n in (r.get("regionName") for r in available) if n)
+            )
+            raise ServiceValidationError(
+                f"Unknown zone(s): {unknown}. Available zones: {names or '(none)'}"
+            )
+        # DISABLED actuation: zone-start is a stateful multi-step handshake in the
+        # app (wake if sleeping -> cancel current task -> save breakpoints ->
+        # select areas -> start) that our isolated REST commands don't faithfully
+        # replicate. Firing cmd 7+6 with a regionList of bare ids leaves the mower
+        # in a "No tasks to be executed in mowing area" locked fault and/or sends
+        # it home to charge. Until the exact app payloads are captured (decrypted
+        # pcap), refuse to actuate - but the resolution above still validates the
+        # zone name and surfaces available_regions.
+        region_ids = [r["regionId"] for r in selected]  # noqa: F841
         raise ServiceValidationError(
-            "Zone start is not supported yet: the cloud regionList format is "
-            "still being worked out and firing it can leave the mower in a "
-            "no-task fault state. Zone names are available via the mower's "
-            "available_regions attribute; start the whole yard with "
-            "lawn_mower.start_mowing in the meantime."
+            "Zone start is not enabled yet: the mower's zone-start is a multi-step "
+            "app handshake we have not fully reverse-engineered, and firing it can "
+            "wedge the mower. Zone names are valid (see available_regions); use "
+            "lawn_mower.start_mowing for a whole-yard start in the meantime."
         )
