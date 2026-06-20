@@ -44,7 +44,10 @@ BINARY_SENSORS: tuple[NeomowBinaryDescription, ...] = (
         device_class=BinarySensorDeviceClass.PROBLEM,
         icon="mdi:alert-circle",
         is_on_fn=lambda s: bool(s.get("ha_alarm_active")),
-        attrs_fn=lambda s: {"alarm_code": s.get("ha_alarm_code")},
+        attrs_fn=lambda s: {
+            "alarm_code": s.get("ha_alarm_code"),
+            "alarm_label": s.get("ha_alarm_label"),
+        },
     ),
 )
 

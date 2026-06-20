@@ -42,21 +42,44 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _derive_alarm_code(status: dict[str, Any]) -> Any:
-    """Best-effort error code/label for a halt that isn't tied to a
-    NOTICE_ALARM errCode (stop/tilt/slip). Prefers the human-readable named
-    sensorStatus fault flags, else a generic halt marker."""
+# Concise English texts (deliberately shorter/clearer than Hookii's own
+# wording). The full numeric errCode->text table is a follow-up via a Flutter
+# AOT decompile (the texts are compiled into libapp.so); these cover the codes
+# + fault classes we currently detect.
+_ERRCODE_TEXT = {
+    "514": "Docking failed", "515": "Docking failed", "116": "Docking",
+    "822": "Lifted", "834": "Blade stalled", "804": "Vision blocked",
+    "513": "Wheel overload", "310": "GPS lost",
+}
+# runStatusList values seen in normal operation (mowing/docked/charging).
+_NORMAL_RUNSTATUS = {0, 5, 7}
+
+
+def _resolve_alarm(status: dict[str, Any]) -> tuple[Any, str]:
+    """Return (code, label) for the current fault. `code` is the machine value
+    (NOTICE errCode, or a derived marker for sensor-detected halts) kept for
+    automations; `label` is a concise human text that always embeds the
+    MQTT-reported code in parentheses, e.g. 'Lifted (822)' or 'Stopped (1)'."""
+    notice = status.get("ha_notice_errcode")
     ss = status.get("sensorStatus")
-    if isinstance(ss, dict):
-        if ss.get("leftLiftHallSensor") or ss.get("rightLiftHallSensor"):
-            return "822"  # lifted (matches the Hookii "Lifted" errCode)
-        if ss.get("leftLiftCollisionBarSensor") or ss.get("rightLiftCollisionBarSensor"):
-            return "collision"
-        if ss.get("leftDriveMotorStatus") or ss.get("rightDriveMotorStatus"):
-            return "drive_motor"
-        if ss.get("turnKnifeDiscMotorStatus") or ss.get("liftingKnifeDiscMotorStatus"):
-            return "blade_motor"
-    return "halted"
+    ss = ss if isinstance(ss, dict) else {}
+    rsl = status.get("runStatusList")
+    halt_codes = [x for x in rsl if x not in _NORMAL_RUNSTATUS] if isinstance(rsl, list) else []
+    if notice:
+        c = str(notice)
+        return notice, f"{_ERRCODE_TEXT.get(c, 'Error')} ({c})"
+    # Halt with no NOTICE errCode (stop/tilt/slip): name it from the human
+    # sensorStatus flags, show the runStatusList halt code that MQTT reported.
+    code_disp = ",".join(str(x) for x in halt_codes) or "stopped"
+    if ss.get("leftLiftHallSensor") or ss.get("rightLiftHallSensor"):
+        return "822", f"Lifted ({code_disp})"
+    if ss.get("leftLiftCollisionBarSensor") or ss.get("rightLiftCollisionBarSensor"):
+        return "collision", f"Bumper stuck ({code_disp})"
+    if ss.get("leftDriveMotorStatus") or ss.get("rightDriveMotorStatus"):
+        return "drive_motor", f"Wheel fault - check for debris ({code_disp})"
+    if ss.get("turnKnifeDiscMotorStatus") or ss.get("liftingKnifeDiscMotorStatus"):
+        return "blade_motor", f"Blade fault ({code_disp})"
+    return "halt", f"Stopped - needs attention ({code_disp})"
 
 
 class MowerState:
@@ -278,20 +301,22 @@ class NeomowCoordinator:
             rsl = state.status.get("runStatusList")
             halted = rs == 4 or (isinstance(rsl, list) and 1 in rsl)
             notice = state.status.get("ha_notice_errcode")
-            if halted:
-                state.status["ha_alarm_active"] = True
-                state.status["ha_alarm_code"] = notice or _derive_alarm_code(state.status)
-            elif notice and not (
+            # NOTICE errors (docking 514/515) recover when the mower is clearly
+            # OK again; halt faults persist until robotStatus/runStatusList read
+            # normal. Either way, derive the code + concise label live.
+            recovered = (
                 state.status.get("ha_is_charging")
                 or state.status.get("ha_state") == "mowing"
-            ):
-                # An outstanding NOTICE_ALARM (e.g. docking 514/515) that has
-                # not recovered yet - keep it until the mower is clearly OK.
+            )
+            if halted or (notice and not recovered):
+                code, label = _resolve_alarm(state.status)
                 state.status["ha_alarm_active"] = True
-                state.status["ha_alarm_code"] = notice
+                state.status["ha_alarm_code"] = code
+                state.status["ha_alarm_label"] = label
             else:
                 state.status["ha_alarm_active"] = False
                 state.status["ha_alarm_code"] = None
+                state.status["ha_alarm_label"] = None
                 state.status["ha_notice_errcode"] = None
             return True
 
@@ -302,8 +327,10 @@ class NeomowCoordinator:
                 # Remember the errCode; the STATUS handler owns clearing it once
                 # the mower recovers (so a docking alarm persists meanwhile).
                 state.status["ha_notice_errcode"] = err
+                code, label = _resolve_alarm(state.status)
                 state.status["ha_alarm_active"] = True
-                state.status["ha_alarm_code"] = err
+                state.status["ha_alarm_code"] = code
+                state.status["ha_alarm_label"] = label
             return True
 
         if msg_type == "DEVICE_MAP_V2":
