@@ -212,3 +212,56 @@ def extract_mowing_width_cm(region_task: dict[str, Any] | None) -> float:
     except (AttributeError, TypeError, KeyError):
         pass
     return MOWING_WIDTH_DEFAULT_CM
+
+
+def extract_regions(region_task: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return the mower's cutting regions (zones) from a REGION_TASK payload as
+    ``[{regionId, regionIndex, regionName, mowingHeight, mowingMode}, ...]``.
+
+    The cloud carries the full zone list in ``REGION_TASK.regionTaskOverviewList``
+    (each entry also has task progress/coverage we don't need here). Falls back to
+    a recursive scan for any list of dicts that look like regions, so a future
+    schema tweak doesn't silently break zone selection. Empty list when absent.
+    """
+    if not region_task:
+        return []
+    rt = region_task.get("data", {}).get("REGION_TASK", {})
+    raw = rt.get("regionTaskOverviewList") if isinstance(rt, dict) else None
+    if not (isinstance(raw, list) and raw):
+        # defensive fallback: find the first list of region-like dicts anywhere
+        found: list = []
+
+        def scan(o: Any) -> None:
+            if found:
+                return
+            if isinstance(o, list):
+                if o and isinstance(o[0], dict) and "regionId" in o[0]:
+                    found.extend(o)
+                    return
+                for v in o:
+                    scan(v)
+            elif isinstance(o, dict):
+                for v in o.values():
+                    scan(v)
+
+        scan(region_task)
+        raw = found
+    regions: list[dict[str, Any]] = []
+    seen: set = set()
+    for r in raw or []:
+        if not isinstance(r, dict) or "regionId" not in r:
+            continue
+        rid = r.get("regionId")
+        if rid in seen:
+            continue
+        seen.add(rid)
+        regions.append(
+            {
+                "regionId": rid,
+                "regionIndex": r.get("regionIndex"),
+                "regionName": r.get("regionName"),
+                "mowingHeight": r.get("mowingHeight"),
+                "mowingMode": r.get("mowingMode"),
+            }
+        )
+    return regions

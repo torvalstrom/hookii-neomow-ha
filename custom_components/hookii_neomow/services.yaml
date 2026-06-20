@@ -1,0 +1,31 @@
+start_region:
+  name: Start region
+  description: >-
+    Start mowing only the selected zone(s), optionally overriding the cutting
+    height. Queue several zones back-to-back by chaining calls from an automation.
+  target:
+    entity:
+      integration: hookii_neomow
+      domain: lawn_mower
+  fields:
+    regions:
+      name: Zones
+      description: >-
+        One or more zone names (as listed in the mower's available_regions
+        attribute) or numeric region IDs.
+      required: true
+      example: '["gardenwest"]'
+      selector:
+        object:
+    mowing_height:
+      name: Cutting height (mm)
+      description: Optional override applied to every selected zone.
+      required: false
+      example: 80
+      selector:
+        number:
+          min: 20
+          max: 100
+          step: 5
+          unit_of_measurement: mm
+          mode: slider
