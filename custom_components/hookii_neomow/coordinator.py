@@ -42,6 +42,23 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _derive_alarm_code(status: dict[str, Any]) -> Any:
+    """Best-effort error code/label for a halt that isn't tied to a
+    NOTICE_ALARM errCode (stop/tilt/slip). Prefers the human-readable named
+    sensorStatus fault flags, else a generic halt marker."""
+    ss = status.get("sensorStatus")
+    if isinstance(ss, dict):
+        if ss.get("leftLiftHallSensor") or ss.get("rightLiftHallSensor"):
+            return "822"  # lifted (matches the Hookii "Lifted" errCode)
+        if ss.get("leftLiftCollisionBarSensor") or ss.get("rightLiftCollisionBarSensor"):
+            return "collision"
+        if ss.get("leftDriveMotorStatus") or ss.get("rightDriveMotorStatus"):
+            return "drive_motor"
+        if ss.get("turnKnifeDiscMotorStatus") or ss.get("liftingKnifeDiscMotorStatus"):
+            return "blade_motor"
+    return "halted"
+
+
 class MowerState:
     """Latest captured state for a single mower."""
 
@@ -248,20 +265,45 @@ class NeomowCoordinator:
                 or abs(state.trail[-1][1] - parsed["y"]) > TRAIL_MIN_MOVE_CM
             ):
                 state.trail.append([parsed["x"], parsed["y"]])
-            # Self-clear a docking/obstacle alarm once the mower is clearly OK
-            # again (charging at dock, or actively mowing).
-            if state.status.get("ha_alarm_active") and (
-                state.status.get("ha_is_charging") or state.status.get("ha_state") == "mowing"
+            # Live fault detection from STATUS (2026-06-20, validated by Tor
+            # triggering stop/tilt/slip on a real mower). Faults set
+            # robotStatus==4 and add "1" to runStatusList - and crucially do
+            # NOT fire NOTICE_ALARM, so the integration was previously blind to
+            # them (the reported "Problem: ok while the mower is stuck"). Note
+            # workStatus keeps reporting "working" through a slip, which is why
+            # the old "clear on mowing" heuristic was wrong. Drive the alarm
+            # off the live STATUS so it persists until the mower itself reports
+            # a normal state again - same semantics the Hookii app shows.
+            rs = state.status.get("robotStatus")
+            rsl = state.status.get("runStatusList")
+            halted = rs == 4 or (isinstance(rsl, list) and 1 in rsl)
+            notice = state.status.get("ha_notice_errcode")
+            if halted:
+                state.status["ha_alarm_active"] = True
+                state.status["ha_alarm_code"] = notice or _derive_alarm_code(state.status)
+            elif notice and not (
+                state.status.get("ha_is_charging")
+                or state.status.get("ha_state") == "mowing"
             ):
+                # An outstanding NOTICE_ALARM (e.g. docking 514/515) that has
+                # not recovered yet - keep it until the mower is clearly OK.
+                state.status["ha_alarm_active"] = True
+                state.status["ha_alarm_code"] = notice
+            else:
                 state.status["ha_alarm_active"] = False
                 state.status["ha_alarm_code"] = None
+                state.status["ha_notice_errcode"] = None
             return True
 
         if msg_type == "NOTICE_ALARM":
             na = payload.get("data", {}).get("NOTICE_ALARM", {})
             err = na.get("errCode") if isinstance(na, dict) else None
-            state.status["ha_alarm_active"] = bool(err)
-            state.status["ha_alarm_code"] = err
+            if err:
+                # Remember the errCode; the STATUS handler owns clearing it once
+                # the mower recovers (so a docking alarm persists meanwhile).
+                state.status["ha_notice_errcode"] = err
+                state.status["ha_alarm_active"] = True
+                state.status["ha_alarm_code"] = err
             return True
 
         if msg_type == "DEVICE_MAP_V2":

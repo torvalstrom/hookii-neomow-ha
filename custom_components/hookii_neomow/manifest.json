@@ -9,5 +9,5 @@
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/torvalstrom/hookii-neomow-ha/issues",
   "requirements": ["paho-mqtt>=1.6.1", "requests>=2.31.0"],
-  "version": "0.3.3"
+  "version": "0.3.4"
 }
