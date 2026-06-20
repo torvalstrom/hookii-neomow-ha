@@ -43,14 +43,22 @@ def _now_iso() -> str:
 
 
 # Concise English texts (deliberately shorter/clearer than Hookii's own
-# wording). The full numeric errCode->text table is a follow-up via a Flutter
-# AOT decompile (the texts are compiled into libapp.so); these cover the codes
-# + fault classes we currently detect.
+# wording, which Tor finds confusing). The fault TEXT is resolved server-side by
+# Hookii (the MQTT NOTICE_ALARM carries only the numeric errCode + i18n key, not
+# the prose; the APK's en.json holds API/UI strings, not device-fault text), so
+# this table is built from codes we confirm live rather than scraped. Codes
+# marked CONFIRMED were observed end-to-end on Tor's mower 2026-06-20.
 _ERRCODE_TEXT = {
-    "514": "Docking failed", "515": "Docking failed", "116": "Docking",
-    "822": "Lifted", "834": "Blade stalled", "804": "Vision blocked",
-    "513": "Wheel overload", "310": "GPS lost",
+    "801": "Stopped",            # CONFIRMED - stop button pressed
+    "823": "Tilted",             # CONFIRMED - mower tilted/lifted off level
+    "514": "Docking failed", "515": "Docking failed",
+    "516": "Not charging at dock",   # greenhouse kissing-dock (Hookii push code)
 }
+# errCodes whose alarm should persist until the mower is *actually* OK again
+# (charging/mowing), not merely until the motion-halt clears. Docking/charging
+# faults leave the mower docked-but-idle, so a halt-cleared check would drop them
+# too early; motion-halt faults (stop/tilt/slip) clear with the halt.
+_DOCKING_CODES = {"514", "515", "516"}
 # runStatusList values seen in normal operation (mowing/docked/charging).
 _NORMAL_RUNSTATUS = {0, 5, 7}
 
@@ -61,25 +69,32 @@ def _resolve_alarm(status: dict[str, Any]) -> tuple[Any, str]:
     automations; `label` is a concise human text that always embeds the
     MQTT-reported code in parentheses, e.g. 'Lifted (822)' or 'Stopped (1)'."""
     notice = status.get("ha_notice_errcode")
+    nc = str(notice) if notice else None
     ss = status.get("sensorStatus")
     ss = ss if isinstance(ss, dict) else {}
     rsl = status.get("runStatusList")
     halt_codes = [x for x in rsl if x not in _NORMAL_RUNSTATUS] if isinstance(rsl, list) else []
-    if notice:
-        c = str(notice)
-        return notice, f"{_ERRCODE_TEXT.get(c, 'Error')} ({c})"
-    # Halt with no NOTICE errCode (stop/tilt/slip): name it from the human
-    # sensorStatus flags, show the runStatusList halt code that MQTT reported.
-    code_disp = ",".join(str(x) for x in halt_codes) or "stopped"
+    # Code shown in parens: prefer the precise NOTICE errCode (e.g. 801/823),
+    # else fall back to the runStatusList halt marker that STATUS reported.
+    disp = nc or (",".join(str(x) for x in halt_codes) or "stopped")
+    # Known errCode -> our own concise text.
+    if nc and nc in _ERRCODE_TEXT:
+        return nc, f"{_ERRCODE_TEXT[nc]} ({disp})"
+    # Unknown/absent errCode: derive a meaningful description from the human
+    # sensorStatus flags, still embedding the most precise code we have. The
+    # alarm_code stays the numeric errCode when present (automations branch on
+    # it); otherwise a stable string marker for the fault class.
     if ss.get("leftLiftHallSensor") or ss.get("rightLiftHallSensor"):
-        return "822", f"Lifted ({code_disp})"
+        return (nc or "lift"), f"Lifted ({disp})"
     if ss.get("leftLiftCollisionBarSensor") or ss.get("rightLiftCollisionBarSensor"):
-        return "collision", f"Bumper stuck ({code_disp})"
+        return (nc or "collision"), f"Bumper stuck ({disp})"
     if ss.get("leftDriveMotorStatus") or ss.get("rightDriveMotorStatus"):
-        return "drive_motor", f"Wheel fault - check for debris ({code_disp})"
+        return (nc or "drive_motor"), f"Wheel fault - check for debris ({disp})"
     if ss.get("turnKnifeDiscMotorStatus") or ss.get("liftingKnifeDiscMotorStatus"):
-        return "blade_motor", f"Blade fault ({code_disp})"
-    return "halt", f"Stopped - needs attention ({code_disp})"
+        return (nc or "blade_motor"), f"Blade fault ({disp})"
+    if nc:
+        return nc, f"Error ({disp})"
+    return "halt", f"Stopped - needs attention ({disp})"
 
 
 class MowerState:
@@ -105,6 +120,13 @@ class MowerState:
         self.device_map_at: str | None = None
         self.path_list_at: str | None = None
         self.path_index_at: str | None = None
+        # createTime of the most recent NOTICE we have acted on. Unread notices
+        # persist server-side, so NOTICE_ALARM's latestNotice can be stale; we
+        # only adopt a notice whose createTime is newer than this. None means
+        # "not yet baselined" - the first NOTICE_ALARM after start records the
+        # current latest WITHOUT raising, so a pre-existing unread notice can't
+        # fire a phantom alarm on every reconnect.
+        self.last_notice_at: str | None = None
         self.trail: deque[list[int]] = deque(maxlen=TRAIL_MAX)
         # Last on-demand camera snapshot (set by the snapshot button/camera).
         self.snapshot: bytes | None = None
@@ -301,14 +323,19 @@ class NeomowCoordinator:
             rsl = state.status.get("runStatusList")
             halted = rs == 4 or (isinstance(rsl, list) and 1 in rsl)
             notice = state.status.get("ha_notice_errcode")
-            # NOTICE errors (docking 514/515) recover when the mower is clearly
-            # OK again; halt faults persist until robotStatus/runStatusList read
-            # normal. Either way, derive the code + concise label live.
             recovered = (
                 state.status.get("ha_is_charging")
                 or state.status.get("ha_state") == "mowing"
             )
-            if halted or (notice and not recovered):
+            # Docking/charging NOTICE faults (514/515/516) leave the mower
+            # docked-but-idle, so they must persist until it is actually OK again
+            # (charging/mowing) - a halt-cleared check would drop them too early.
+            # Motion-halt faults (stop/tilt/slip) clear as soon as the halt
+            # clears, so we don't keep a stale alarm after the user resets it.
+            notice_persists = (
+                notice is not None and str(notice) in _DOCKING_CODES and not recovered
+            )
+            if halted or notice_persists:
                 code, label = _resolve_alarm(state.status)
                 state.status["ha_alarm_active"] = True
                 state.status["ha_alarm_code"] = code
@@ -318,19 +345,52 @@ class NeomowCoordinator:
                 state.status["ha_alarm_code"] = None
                 state.status["ha_alarm_label"] = None
                 state.status["ha_notice_errcode"] = None
+                state.status["ha_notice_at"] = None
             return True
 
         if msg_type == "NOTICE_ALARM":
+            # NOTICE_ALARM is an unread-notice SUMMARY, NOT a flat alarm:
+            #   {"total": N, "latestNotice": {...}, "noticeList": [{...}]}
+            # Each notice carries the real errCode + i18n title/content keys +
+            # serialNumber + createTime. When total==0 it is just {"total": 0}
+            # (no unread) - which earlier looked like "just a count" and left the
+            # integration blind to NOTICE-only faults (e.g. docking 516). The
+            # code is in the MQTT data all along; it just lives one level down.
             na = payload.get("data", {}).get("NOTICE_ALARM", {})
-            err = na.get("errCode") if isinstance(na, dict) else None
-            if err:
-                # Remember the errCode; the STATUS handler owns clearing it once
-                # the mower recovers (so a docking alarm persists meanwhile).
-                state.status["ha_notice_errcode"] = err
-                code, label = _resolve_alarm(state.status)
-                state.status["ha_alarm_active"] = True
-                state.status["ha_alarm_code"] = code
-                state.status["ha_alarm_label"] = label
+            latest = None
+            if isinstance(na, dict) and na.get("total"):
+                latest = na.get("latestNotice")
+                if not isinstance(latest, dict):
+                    nl = na.get("noticeList")
+                    latest = nl[0] if isinstance(nl, list) and nl else None
+            err = ct = None
+            if isinstance(latest, dict):
+                # The summary is per-device, but guard on serial anyway so a
+                # stray notice can't raise an alarm on the wrong mower.
+                sn = latest.get("serialNumber")
+                if not sn or sn == state.serial:
+                    err = latest.get("errCode")
+                    ct = latest.get("createTime")
+            if not err or not ct:
+                return True
+            if state.last_notice_at is None:
+                # First NOTICE_ALARM since start: baseline only, don't raise a
+                # phantom alarm for a pre-existing unread notice.
+                state.last_notice_at = ct
+                return True
+            if ct <= state.last_notice_at:
+                # Stale/duplicate (createTime is China-time "Y-m-d H:M:S", so a
+                # lexicographic compare is chronological) - ignore.
+                return True
+            # A genuinely new fault. Remember it (+ when); the STATUS handler
+            # owns clearing it once the mower recovers (docking alarms persist).
+            state.last_notice_at = ct
+            state.status["ha_notice_errcode"] = str(err)
+            state.status["ha_notice_at"] = ct
+            code, label = _resolve_alarm(state.status)
+            state.status["ha_alarm_active"] = True
+            state.status["ha_alarm_code"] = code
+            state.status["ha_alarm_label"] = label
             return True
 
         if msg_type == "DEVICE_MAP_V2":

@@ -29,11 +29,45 @@ Per mower (one device each):
   cut area, mowing coverage, efficiency, task progress, mowing height, and the
   battery/blade/drive-motor temperatures. (Voltage, GPS satellites and firmware
   version ship disabled-by-default as diagnostics.)
-- **Binary sensors** — firmware-upgrading, error/alarm.
+- **Binary sensors** — firmware-upgrading and **error/fault** (see
+  [Error & fault detection](#error--fault-detection)).
 - **Buttons** — start, pause, return to dock, stop (keep/clear progress), clear
   exception, and **camera snapshot**.
 - **Camera** — shows the latest on-demand snapshot (press the snapshot button;
   the mower's camera must be awake — a docked mower usually declines).
+
+## Error & fault detection
+
+The **error** binary sensor (`binary_sensor.neomow_<serial>_problem`) turns on when
+the mower needs attention, and exposes two attributes:
+
+- `alarm_label` — a concise human description with the Hookii error code in
+  parentheses, e.g. `Stopped (801)`, `Tilted (823)`, `Not charging at dock (516)`.
+  This is the single source of truth — point dashboards/notifications at it.
+- `alarm_code` — the raw code for automations to branch on (the numeric Hookii
+  `errCode` when known, else a fault-class marker like `lift` / `halt`).
+
+Two complementary signals feed it:
+
+1. **Live STATUS** — a motion halt (`robotStatus == 4` / `1` in `runStatusList`) is
+   detected immediately, including faults the cloud never raises a notice for
+   (stop button, tilt, wheel slip). When no code is present the label is derived
+   from the mower's own sensor flags (lift hall, bumper, drive/blade motor).
+2. **Cloud notices** — the MQTT `NOTICE_ALARM` summary carries the precise
+   `errCode` for the latest unread notice; docking/charging faults (`514` / `515`
+   / `516`) that don't halt the mower are caught this way and persist until it
+   charges or mows again. Stale unread notices are ignored — only a notice newer
+   than the last one handled raises an alarm.
+
+The fault *text* is resolved server-side by Hookii, so this integration ships its
+own concise wording (Hookii's translations are often confusing) and always embeds
+the reported code. Confirmed codes so far: `801` stopped, `823` tilted, `516` not
+charging at dock, `514` / `515` docking failed. A simple `automation` +
+`input_text` "capture error log" can record codes you encounter in the field.
+
+A full dump of a mower's live state is available via **Settings → Devices &
+Services → Hookii Neomow → ⋮ → Download diagnostics** (coordinates + serials
+redacted).
 
 ## Install
 

@@ -35,10 +35,12 @@ BINARY_SENSORS: tuple[NeomowBinaryDescription, ...] = (
         icon="mdi:cog-sync",
         is_on_fn=lambda s: bool(s.get("ha_upgrading")),
     ),
-    # Error/alarm — set by NOTICE_ALARM messages (coordinator._apply) and
-    # self-cleared by STATUS when ha_is_charging or ha_state == "mowing".
-    # Exposes the Hookii errCode as an `alarm_code` attribute so automations
-    # can branch on the specific code (e.g. 514/515/116 docking-recoverable).
+    # Error/alarm — raised from live STATUS halt detection (robotStatus==4 /
+    # "1" in runStatusList) and enriched with the precise errCode from
+    # NOTICE_ALARM. Motion-halt faults clear when the halt clears; docking
+    # faults (514/515/516) persist until the mower charges/mows again.
+    # `alarm_code` is the numeric Hookii errCode when known (e.g. 801 stop,
+    # 823 tilt, 516 not-charging-at-dock) so automations can branch on it.
     NeomowBinaryDescription(
         key="error",
         device_class=BinarySensorDeviceClass.PROBLEM,
