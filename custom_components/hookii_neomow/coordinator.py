@@ -127,6 +127,8 @@ class MowerState:
         # current latest WITHOUT raising, so a pre-existing unread notice can't
         # fire a phantom alarm on every reconnect.
         self.last_notice_at: str | None = None
+        # Cutting zones fetched via REST (reliable, unlike rare MQTT REGION_TASK).
+        self.regions: list[dict[str, Any]] = []
         self.trail: deque[list[int]] = deque(maxlen=TRAIL_MAX)
         # Last on-demand camera snapshot (set by the snapshot button/camera).
         self.snapshot: bytes | None = None
@@ -200,11 +202,38 @@ class NeomowCoordinator:
         _LOGGER.info(
             "hookii cloud client started for %d mower(s)", len(self.mowers)
         )
+        # Populate the cutting-zone list in the background (REST; doesn't block
+        # startup and survives the rare MQTT REGION_TASK never arriving).
+        self.hass.async_create_task(self.async_refresh_regions())
 
     async def async_stop(self) -> None:
         if self._client is not None:
             await self.hass.async_add_executor_job(self._client.stop)
             self._client = None
+
+    async def async_refresh_regions(self, label: str | None = None) -> None:
+        """Refresh the cached cutting-zone list (REST) for one or all mowers.
+        Best-effort: failures leave the previous cache intact."""
+        if self._client is None:
+            return
+        items = (
+            [(label, self.mowers[label])]
+            if label is not None and label in self.mowers
+            else list(self.mowers.items())
+        )
+        for lbl, state in items:
+            try:
+                regs = await self.hass.async_add_executor_job(
+                    self._client.get_regions, state.serial
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("[%s] region refresh failed", lbl)
+                continue
+            if regs:
+                state.regions = regs
+                async_dispatcher_send(
+                    self.hass, f"{SIGNAL_MOWER_UPDATED}_{self.entry_id}", lbl
+                )
 
     @property
     def client(self) -> HookiiCloudClient | None:

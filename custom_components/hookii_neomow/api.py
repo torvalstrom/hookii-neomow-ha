@@ -555,6 +555,38 @@ class HookiiCloudClient:
         """Trigger + fetch an on-demand camera snapshot (synchronous REST)."""
         return _capture_snapshot(self.cfg, self.acct, serial, self.model_for(serial))
 
+    def get_regions(self, serial: str) -> list[dict]:
+        """Fetch the mower's cutting zones via REST (synchronous):
+        ``[{regionId, regionIndex, regionName, mowingHeight, mowingMode}, ...]``.
+
+        Uses /api/v1/mower/region/task/overview - reliable + on-demand, unlike the
+        rarely-pushed MQTT REGION_TASK. Returns [] on failure."""
+        data = _post(
+            self.cfg,
+            self.acct,
+            "/api/v1/mower/region/task/overview",
+            {"serialNumber": serial, "modelCode": self.model_for(serial)},
+        )
+        if isinstance(data, dict):
+            raw = data.get("regionTaskOverviewList") or data.get("list") or []
+        elif isinstance(data, list):
+            raw = data
+        else:
+            raw = []
+        out = []
+        for r in raw:
+            if isinstance(r, dict) and r.get("regionId") is not None:
+                out.append(
+                    {
+                        "regionId": r.get("regionId"),
+                        "regionIndex": r.get("regionIndex"),
+                        "regionName": r.get("regionName"),
+                        "mowingHeight": r.get("mowingHeight"),
+                        "mowingMode": r.get("mowingMode"),
+                    }
+                )
+        return out
+
 
 def _now_iso() -> str:
     from datetime import timezone

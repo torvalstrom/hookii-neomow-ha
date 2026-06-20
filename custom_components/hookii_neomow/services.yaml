@@ -14,18 +14,6 @@ start_region:
         One or more zone names (as listed in the mower's available_regions
         attribute) or numeric region IDs.
       required: true
-      example: '["gardenwest"]'
+      example: '["GardenNorth", "south"]'
       selector:
         object:
-    mowing_height:
-      name: Cutting height (mm)
-      description: Optional override applied to every selected zone.
-      required: false
-      example: 80
-      selector:
-        number:
-          min: 20
-          max: 100
-          step: 5
-          unit_of_measurement: mm
-          mode: slider

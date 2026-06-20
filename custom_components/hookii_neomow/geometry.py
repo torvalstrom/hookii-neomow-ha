@@ -214,21 +214,14 @@ def extract_mowing_width_cm(region_task: dict[str, Any] | None) -> float:
     return MOWING_WIDTH_DEFAULT_CM
 
 
-def extract_regions(region_task: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """Return the mower's cutting regions (zones) from a REGION_TASK payload as
-    ``[{regionId, regionIndex, regionName, mowingHeight, mowingMode}, ...]``.
-
-    The cloud carries the full zone list in ``REGION_TASK.regionTaskOverviewList``
-    (each entry also has task progress/coverage we don't need here). Falls back to
-    a recursive scan for any list of dicts that look like regions, so a future
-    schema tweak doesn't silently break zone selection. Empty list when absent.
-    """
+def _regions_from_region_task(region_task: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Zones from REGION_TASK.regionTaskOverviewList (richest source: carries
+    regionIndex + mowingHeight). Recursive fallback for schema drift."""
     if not region_task:
         return []
     rt = region_task.get("data", {}).get("REGION_TASK", {})
     raw = rt.get("regionTaskOverviewList") if isinstance(rt, dict) else None
     if not (isinstance(raw, list) and raw):
-        # defensive fallback: find the first list of region-like dicts anywhere
         found: list = []
 
         def scan(o: Any) -> None:
@@ -246,22 +239,93 @@ def extract_regions(region_task: dict[str, Any] | None) -> list[dict[str, Any]]:
 
         scan(region_task)
         raw = found
+    out = []
+    for r in raw or []:
+        if isinstance(r, dict) and "regionId" in r:
+            out.append(
+                {
+                    "regionId": r.get("regionId"),
+                    "regionIndex": r.get("regionIndex"),
+                    "regionName": r.get("regionName"),
+                    "mowingHeight": r.get("mowingHeight"),
+                    "mowingMode": r.get("mowingMode"),
+                }
+            )
+    return out
+
+
+def _regions_from_device_map(device_map: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Zones from DEVICE_MAP_V2.mapDataList[].mowingAreaElementList[] (areaId/
+    areaName). The map is pushed far more reliably than REGION_TASK, so this is
+    the practical fallback for zone enumeration. Only id+name are available here;
+    regionIndex/mowingHeight come from REGION_TASK when present."""
+    if not device_map:
+        return []
+    d = device_map.get("data", {}).get("DEVICE_MAP_V2", {})
+    if not isinstance(d, dict):
+        return []
+    out = []
+    for map_entry in d.get("mapDataList", []) or []:
+        if not isinstance(map_entry, dict):
+            continue
+        for area in map_entry.get("mowingAreaElementList", []) or []:
+            if not isinstance(area, dict):
+                continue
+            aid = area.get("areaId", area.get("regionId"))
+            if aid is None:
+                continue
+            out.append(
+                {
+                    "regionId": aid,
+                    "regionIndex": area.get("regionIndex", area.get("areaIndex")),
+                    "regionName": area.get("areaName", area.get("regionName")),
+                    "mowingHeight": area.get("mowingHeight"),
+                    "mowingMode": area.get("mowingMode"),
+                }
+            )
+    return out
+
+
+def _regions_from_status(status: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The mower's CURRENT zone from the latest STATUS (always present once
+    telemetry is flowing, unlike the rarely-pushed map/REGION_TASK). Guarantees
+    the zone the mower is on is always selectable, even before a map arrives."""
+    if not isinstance(status, dict) or status.get("regionId") in (None, 0):
+        return []
+    return [
+        {
+            "regionId": status.get("regionId"),
+            "regionIndex": status.get("regionIndex"),
+            "regionName": status.get("regionName"),
+            "mowingHeight": status.get("mowingHeight"),
+            "mowingMode": status.get("mowingMode"),
+        }
+    ]
+
+
+def extract_regions(
+    region_task: dict[str, Any] | None,
+    device_map: dict[str, Any] | None = None,
+    status: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Return the mower's cutting zones as
+    ``[{regionId, regionIndex, regionName, mowingHeight, mowingMode}, ...]``.
+
+    Merges three sources, richest first, de-duped by regionId: REGION_TASK (full
+    list + regionIndex/mowingHeight), DEVICE_MAP_V2 (full list, id+name), and the
+    current zone from STATUS (always available). Empty only before any telemetry.
+    """
     regions: list[dict[str, Any]] = []
     seen: set = set()
-    for r in raw or []:
-        if not isinstance(r, dict) or "regionId" not in r:
-            continue
-        rid = r.get("regionId")
-        if rid in seen:
-            continue
-        seen.add(rid)
-        regions.append(
-            {
-                "regionId": rid,
-                "regionIndex": r.get("regionIndex"),
-                "regionName": r.get("regionName"),
-                "mowingHeight": r.get("mowingHeight"),
-                "mowingMode": r.get("mowingMode"),
-            }
-        )
+    for src in (
+        _regions_from_region_task(region_task),
+        _regions_from_device_map(device_map),
+        _regions_from_status(status),
+    ):
+        for r in src:
+            rid = r.get("regionId")
+            if rid is None or rid in seen:
+                continue
+            seen.add(rid)
+            regions.append(r)
     return regions

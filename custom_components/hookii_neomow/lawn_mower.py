@@ -31,11 +31,8 @@ _STATE_TO_ACTIVITY = {
 
 SERVICE_START_REGION = "start_region"
 # regions: list of zone names (case-insensitive) or numeric regionIds.
-# mowing_height: optional per-call cutting-height override (mm) applied to every
-# selected zone.
 START_REGION_SCHEMA = {
     vol.Required("regions"): vol.All(cv.ensure_list, [vol.Any(cv.string, int)]),
-    vol.Optional("mowing_height"): vol.All(vol.Coerce(int), vol.Range(min=20, max=100)),
 }
 
 
@@ -77,7 +74,9 @@ class NeomowLawnMower(NeomowEntity, LawnMowerEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         # Surface the selectable zone names so users (and the start_region
         # service) know what to pass. Populated once a REGION_TASK has arrived.
-        regions = geometry.extract_regions(self._state.region_task)
+        regions = self._state.regions or geometry.extract_regions(
+            self._state.region_task, self._state.device_map, self._state.status
+        )
         return {
             "available_regions": [
                 r["regionName"] for r in regions if r.get("regionName")
@@ -101,48 +100,20 @@ class NeomowLawnMower(NeomowEntity, LawnMowerEntity):
     async def async_dock(self) -> None:
         await self._send("dock")
 
-    async def async_start_region(
-        self, regions: list, mowing_height: int | None = None
-    ) -> None:
-        """Start mowing only the named/identified zone(s), optionally overriding
-        cutting height. Builds the cloud regionList from the live REGION_TASK zone
-        list so each entry carries the regionId/regionIndex the cloud expects."""
-        available = geometry.extract_regions(self._state.region_task)
-        if not available:
-            raise HomeAssistantError(
-                "No zone data yet for this mower (waiting for REGION_TASK). "
-                "Open the mower in the Hookii app once, then retry."
-            )
-        by_name = {
-            str(r.get("regionName", "")).strip().lower(): r for r in available
-        }
-        by_id = {str(r.get("regionId")): r for r in available}
-        selected: list[dict] = []
-        unknown: list = []
-        for req in regions:
-            key = str(req).strip()
-            r = by_name.get(key.lower()) or by_id.get(key)
-            if r is None:
-                unknown.append(req)
-            elif r not in selected:
-                selected.append(r)
-        if unknown:
-            names = ", ".join(
-                sorted(n for n in (r.get("regionName") for r in available) if n)
-            )
-            raise ServiceValidationError(
-                f"Unknown zone(s): {unknown}. Available zones: {names or '(none)'}"
-            )
-        region_list = []
-        for r in selected:
-            entry = {k: v for k, v in r.items() if k != "regionName" and v is not None}
-            if mowing_height is not None:
-                entry["mowingHeight"] = mowing_height
-            region_list.append(entry)
-        _LOGGER.info(
-            "[%s] start_region -> %s (regionList=%s)",
-            self._state.label,
-            [r.get("regionName") for r in selected],
-            region_list,
+    async def async_start_region(self, regions: list) -> None:
+        """DISABLED pending a confirmed regionList format.
+
+        The cloud's start/stop/job command accepts a regionList of bare regionIds
+        syntactically (code 1) but it leaves the mower in a "no tasks pending in
+        the selected zones" fault state - the actual zone-start the app uses is a
+        3-step flow (start -> select zones -> resume) whose exact payload we have
+        not captured. Sending the unconfirmed command can wedge the mower, so this
+        service refuses to fire until the format is verified from a real capture.
+        The available_regions attribute (zone enumeration) still works."""
+        raise ServiceValidationError(
+            "Zone start is not supported yet: the cloud regionList format is "
+            "still being worked out and firing it can leave the mower in a "
+            "no-task fault state. Zone names are available via the mower's "
+            "available_regions attribute; start the whole yard with "
+            "lawn_mower.start_mowing in the meantime."
         )
-        await self._send("start", region_list=region_list)
