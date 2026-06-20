@@ -127,8 +127,9 @@ class MowerState:
         # current latest WITHOUT raising, so a pre-existing unread notice can't
         # fire a phantom alarm on every reconnect.
         self.last_notice_at: str | None = None
-        # Cutting zones fetched via REST (reliable, unlike rare MQTT REGION_TASK).
-        self.regions: list[dict[str, Any]] = []
+        # Mowing zones fetched via REST map/data (small areaId + areaName), the
+        # ids the start command's regionList expects. Reliable, unlike rare MQTT.
+        self.areas: list[dict[str, Any]] = []
         self.trail: deque[list[int]] = deque(maxlen=TRAIL_MAX)
         # Last on-demand camera snapshot (set by the snapshot button/camera).
         self.snapshot: bytes | None = None
@@ -202,18 +203,18 @@ class NeomowCoordinator:
         _LOGGER.info(
             "hookii cloud client started for %d mower(s)", len(self.mowers)
         )
-        # Populate the cutting-zone list in the background (REST; doesn't block
-        # startup and survives the rare MQTT REGION_TASK never arriving).
-        self.hass.async_create_task(self.async_refresh_regions())
+        # Populate the mowing-zone list in the background (REST map/data; doesn't
+        # block startup and survives the rare MQTT DEVICE_MAP_V2 never arriving).
+        self.hass.async_create_task(self.async_refresh_areas())
 
     async def async_stop(self) -> None:
         if self._client is not None:
             await self.hass.async_add_executor_job(self._client.stop)
             self._client = None
 
-    async def async_refresh_regions(self, label: str | None = None) -> None:
-        """Refresh the cached cutting-zone list (REST) for one or all mowers.
-        Best-effort: failures leave the previous cache intact."""
+    async def async_refresh_areas(self, label: str | None = None) -> None:
+        """Refresh the cached mowing-zone list (REST map/data) for one or all
+        mowers. Best-effort: failures leave the previous cache intact."""
         if self._client is None:
             return
         items = (
@@ -223,14 +224,14 @@ class NeomowCoordinator:
         )
         for lbl, state in items:
             try:
-                regs = await self.hass.async_add_executor_job(
-                    self._client.get_regions, state.serial
+                areas = await self.hass.async_add_executor_job(
+                    self._client.get_areas, state.serial
                 )
             except Exception:  # noqa: BLE001
-                _LOGGER.exception("[%s] region refresh failed", lbl)
+                _LOGGER.exception("[%s] area refresh failed", lbl)
                 continue
-            if regs:
-                state.regions = regs
+            if areas:
+                state.areas = areas
                 async_dispatcher_send(
                     self.hass, f"{SIGNAL_MOWER_UPDATED}_{self.entry_id}", lbl
                 )

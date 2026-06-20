@@ -555,36 +555,52 @@ class HookiiCloudClient:
         """Trigger + fetch an on-demand camera snapshot (synchronous REST)."""
         return _capture_snapshot(self.cfg, self.acct, serial, self.model_for(serial))
 
-    def get_regions(self, serial: str) -> list[dict]:
-        """Fetch the mower's cutting zones via REST (synchronous):
-        ``[{regionId, regionIndex, regionName, mowingHeight, mowingMode}, ...]``.
+    def get_areas(self, serial: str) -> list[dict]:
+        """Fetch the mower's mowing zones via REST (synchronous):
+        ``[{areaId, areaName, mowingHeight, mowingMode, mowingWidth, mowingSpeed,
+        mowingNum}, ...]``.
 
-        Uses /api/v1/mower/region/task/overview - reliable + on-demand, unlike the
-        rarely-pushed MQTT REGION_TASK. Returns [] on failure."""
+        Reads /api/v1/mower/cmd/calendar/param (command=0). Its ``areaParamList``
+        carries the SMALL 0-based ``areaId`` (+ areaName + per-zone params) that the
+        start command's ``regionList`` expects - NOT the large ``regionId`` from
+        region/task/overview (that one is task-tracking only; sending it as a
+        regionList yields "no tasks in the selected area"). Reliable + on-demand.
+        Returns [] on failure."""
         data = _post(
             self.cfg,
             self.acct,
-            "/api/v1/mower/region/task/overview",
-            {"serialNumber": serial, "modelCode": self.model_for(serial)},
+            "/api/v1/mower/cmd/calendar/param",
+            {
+                "command": 0,
+                "response": None,
+                "serialNumber": serial,
+                "modelCode": self.model_for(serial),
+                "areaParamList": None,
+                "globalParam": None,
+                "globalModeParamList": None,
+            },
         )
-        if isinstance(data, dict):
-            raw = data.get("regionTaskOverviewList") or data.get("list") or []
-        elif isinstance(data, list):
-            raw = data
-        else:
-            raw = []
-        out = []
-        for r in raw:
-            if isinstance(r, dict) and r.get("regionId") is not None:
-                out.append(
-                    {
-                        "regionId": r.get("regionId"),
-                        "regionIndex": r.get("regionIndex"),
-                        "regionName": r.get("regionName"),
-                        "mowingHeight": r.get("mowingHeight"),
-                        "mowingMode": r.get("mowingMode"),
-                    }
-                )
+        raw = data.get("areaParamList") if isinstance(data, dict) else None
+        out: list[dict] = []
+        seen: set = set()
+        for a in raw or []:
+            if not isinstance(a, dict) or a.get("areaId") is None:
+                continue
+            aid = a.get("areaId")
+            if aid in seen:
+                continue
+            seen.add(aid)
+            out.append(
+                {
+                    "areaId": aid,
+                    "areaName": a.get("areaName"),
+                    "mowingHeight": a.get("mowingHeight"),
+                    "mowingMode": a.get("mowingMode"),
+                    "mowingWidth": a.get("mowingWidth"),
+                    "mowingSpeed": a.get("mowingSpeed"),
+                    "mowingNum": a.get("mowingNum"),
+                }
+            )
         return out
 
 

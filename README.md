@@ -24,7 +24,8 @@ Per mower (one device each):
   card, shipped inside the integration and auto-registered — nothing extra to
   install).
 - **`lawn_mower` entity** — start / pause / return-to-dock, with live activity
-  (mowing / docked / returning).
+  (mowing / docked / returning), plus a `hookii_neomow.start_region` service to mow
+  only chosen zones (see [Mow specific zones](#mow-specific-zones)).
 - **Sensors** — battery, blade RPM, charge current, work status, current region,
   cut area, mowing coverage, efficiency, task progress, mowing height, and the
   battery/blade/drive-motor temperatures. (Voltage, GPS satellites and firmware
@@ -35,6 +36,51 @@ Per mower (one device each):
   exception, and **camera snapshot**.
 - **Camera** — shows the latest on-demand snapshot (press the snapshot button;
   the mower's camera must be awake — a docked mower usually declines).
+
+## Mow specific zones
+
+Each mower exposes its mowing zones in the `available_regions` attribute of the
+`lawn_mower` entity (e.g. `["GardenNorth", "south", "mortenroad"]`). To mow only
+some of them, call the `hookii_neomow.start_region` service:
+
+```yaml
+service: hookii_neomow.start_region
+target:
+  entity_id: lawn_mower.neomow_<serial>
+data:
+  regions: ["south"]          # one or more zone names (or numeric area ids)
+```
+
+A sleeping mower wakes automatically. If it's already mowing another zone, the
+current job is cancelled (keeping breakpoint progress) before the new zone starts.
+A whole-yard mow is still just `lawn_mower.start_mowing`.
+
+### Queue several zones with an automation
+
+The cloud runs one zone at a time, so to chain zones start the next one when the
+mower returns to the dock (its `activity` becomes `docked`):
+
+```yaml
+alias: Neomow zone queue (south then mortenroad)
+triggers:
+  - trigger: state
+    entity_id: lawn_mower.neomow_<serial>
+    to: docked
+conditions:
+  - condition: state
+    entity_id: input_text.neomow_queue   # holds remaining zones, comma-separated
+    state: "!="
+    # ... pop the next zone from your queue helper and call start_region with it
+actions:
+  - service: hookii_neomow.start_region
+    target: { entity_id: lawn_mower.neomow_<serial> }
+    data:
+      regions: "{{ states('input_text.neomow_queue').split(',')[0] }}"
+  # ... then trim the consumed zone off input_text.neomow_queue
+```
+
+(Use any queue helper you like - an `input_text`, a `input_select`, or a script
+variable. The key idea: trigger on `docked` so each zone starts from idle.)
 
 ## Error & fault detection
 
