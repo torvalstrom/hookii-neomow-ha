@@ -47,7 +47,8 @@
       "firmware": { "name": "Firmware version" }
     },
     "binary_sensor": {
-      "upgrading": { "name": "Firmware upgrading" }
+      "upgrading": { "name": "Firmware upgrading" },
+      "snapshot_fresh": { "name": "Snapshot fresh" }
     },
     "button": {
       "start": { "name": "Start" },

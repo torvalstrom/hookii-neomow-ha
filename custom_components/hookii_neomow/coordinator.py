@@ -247,6 +247,11 @@ class NeomowCoordinator:
             return
         state.snapshot = data
         state.snapshot_at = _now_iso()
+        # Mirror into status so the snapshot_fresh binary_sensor (which reads the
+        # status dict) sees it. Set when the IMAGE arrives, so the dashboard card
+        # appears exactly then and auto-hides 30s later (the ~1.5s STATUS stream
+        # re-evaluates the sensor, flipping it off just after the 30s mark).
+        state.status["ha_snapshot_at"] = state.snapshot_at
         async_dispatcher_send(
             self.hass, f"{SIGNAL_MOWER_UPDATED}_{self.entry_id}", label
         )

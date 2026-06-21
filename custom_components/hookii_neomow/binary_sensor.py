@@ -3,7 +3,25 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
+
+# How long after a snapshot arrives the "snapshot_fresh" sensor stays on, so the
+# dashboard camera card shows the photo when it comes and auto-hides after.
+_SNAPSHOT_FRESH_SECONDS = 30
+
+
+def _snapshot_fresh(s: dict[str, Any]) -> bool:
+    at = s.get("ha_snapshot_at")
+    if not at:
+        return False
+    try:
+        t = datetime.fromisoformat(at)
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - t).total_seconds() < _SNAPSHOT_FRESH_SECONDS
+    except (ValueError, TypeError):
+        return False
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
@@ -34,6 +52,16 @@ BINARY_SENSORS: tuple[NeomowBinaryDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         icon="mdi:cog-sync",
         is_on_fn=lambda s: bool(s.get("ha_upgrading")),
+    ),
+    # On for ~30s after a fresh snapshot arrives (set in coordinator.set_snapshot).
+    # The dashboard camera card is conditional on this so the photo shows when it
+    # comes and disappears after; re-evaluated by the ~1.5s STATUS stream.
+    NeomowBinaryDescription(
+        key="snapshot_fresh",
+        translation_key="snapshot_fresh",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:camera-iris",
+        is_on_fn=_snapshot_fresh,
     ),
     # Error/alarm — raised from live STATUS halt detection (robotStatus==4 /
     # "1" in runStatusList) and enriched with the precise errCode from
