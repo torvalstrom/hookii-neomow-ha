@@ -24,10 +24,9 @@ def normalise_status(status: dict[str, Any]) -> dict[str, Any]:
             for k, v in nested.items():
                 status.setdefault(k, v)
 
-    # Blade rpm: publish magnitude (sign encodes CW/CCW direction).
-    rpm = status.get("knifeDiscMotorSpeed")
-    if isinstance(rpm, (int, float)):
-        status["knifeDiscMotorSpeed"] = abs(rpm)
+    # Blade rpm: keep the RAW signed value - the sign encodes the cutting
+    # motor's spin direction (CW vs CCW), which is meaningful telemetry. Do NOT
+    # abs() it (that bug made the blade_rpm sensor only ever report positives).
 
     # Shape B -> Shape A aliases.
     if "battery" in status and "electricity" not in status:
