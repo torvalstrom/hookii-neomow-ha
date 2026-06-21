@@ -2,9 +2,13 @@
 
 The mower only produces a photo when asked (REST capture), so this entity does
 NOT poll the cloud; it serves the most recent snapshot captured by the
-"Camera snapshot" button. Empty until the first capture.
+"Camera snapshot" button. Before the first capture (or after a restart, since the
+snapshot is held in memory) it serves a "No snapshot yet" placeholder so the
+dashboard card shows a clean image instead of a broken/spinning 500.
 """
 from __future__ import annotations
+
+from io import BytesIO
 
 from homeassistant.components.camera import Camera
 from homeassistant.config_entries import ConfigEntry
@@ -14,6 +18,24 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN
 from .coordinator import NeomowCoordinator
 from .entity import NeomowEntity
+
+
+def _make_placeholder() -> bytes | None:
+    """A small 'No snapshot yet' JPEG, so an empty camera renders cleanly instead
+    of returning None (which HA serves as a 500). Generated once at import."""
+    try:
+        from PIL import Image, ImageDraw
+
+        img = Image.new("RGB", (640, 360), (28, 28, 32))
+        ImageDraw.Draw(img).text((248, 172), "No snapshot yet", fill=(140, 140, 150))
+        buf = BytesIO()
+        img.save(buf, "JPEG", quality=70)
+        return buf.getvalue()
+    except Exception:  # noqa: BLE001 - never let a placeholder failure break setup
+        return None
+
+
+_PLACEHOLDER = _make_placeholder()
 
 
 async def async_setup_entry(
@@ -35,4 +57,4 @@ class NeomowCamera(NeomowEntity, Camera):
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
-        return self._state.snapshot
+        return self._state.snapshot or _PLACEHOLDER
