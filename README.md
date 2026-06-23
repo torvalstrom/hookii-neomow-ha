@@ -39,9 +39,18 @@ Per mower (one device each):
 
 ## Mow specific zones
 
-Each mower exposes its mowing zones in the `available_regions` attribute of the
-`lawn_mower` entity (e.g. `["GardenNorth", "south", "mortenroad"]`). To mow only
-some of them, call the `hookii_neomow.start_region` service:
+**Where zones come from:** you define zones (regions/areas) in the **Hookii
+mobile app** when you map your lawn - this integration *reads* them, it does not
+create them. There is no separate "regions table" to fill in here.
+
+**Where to see your zones in Home Assistant:** open **Developer Tools → States**,
+find your `lawn_mower.neomow_<serial>` entity, and look at its
+**`available_regions`** attribute (e.g. `["GardenNorth", "south", "mortenroad"]`).
+That list is your table of zones.
+
+**Why "Start" mows everything:** the normal start button
+(`lawn_mower.start_mowing`) is a whole-yard mow - it covers all zones. To mow only
+some zones, call the `hookii_neomow.start_region` service instead:
 
 ```yaml
 service: hookii_neomow.start_region
