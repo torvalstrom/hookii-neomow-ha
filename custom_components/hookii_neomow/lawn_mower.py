@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import unicodedata
 from typing import Any
 
 import voluptuous as vol
@@ -23,6 +24,18 @@ from .coordinator import NeomowCoordinator
 from .entity import NeomowEntity
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _norm_name(value: object) -> str:
+    """Normalise a zone name for matching: NFC-normalise, strip, casefold.
+
+    Without NFC normalisation a name typed on an iOS/macOS keyboard (which
+    often produces a DECOMPOSED 'a' + combining diaeresis) fails to match the
+    cloud's COMPOSED 'ä' even though they look identical — so an accented zone
+    name like 'ylätaka' is rejected as an unknown zone. casefold() handles the
+    case-insensitive comparison."""
+    return unicodedata.normalize("NFC", str(value)).strip().casefold()
+
 
 _STATE_TO_ACTIVITY = {
     "mowing": LawnMowerActivity.MOWING,
@@ -121,12 +134,12 @@ class NeomowLawnMower(NeomowEntity, LawnMowerEntity):
                 "No zone data for this mower (could not fetch the map). "
                 "Try again in a moment."
             )
-        by_name = {str(a.get("areaName", "")).strip().lower(): a for a in available}
+        by_name = {_norm_name(a.get("areaName", "")): a for a in available}
         by_id = {str(a.get("areaId")): a for a in available}
         selected: list[dict] = []
         unknown: list = []
         for req in regions:
-            a = by_name.get(str(req).strip().lower()) or by_id.get(str(req).strip())
+            a = by_name.get(_norm_name(req)) or by_id.get(str(req).strip())
             if a is None:
                 unknown.append(req)
             elif a not in selected:
