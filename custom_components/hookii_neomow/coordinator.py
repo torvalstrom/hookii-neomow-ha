@@ -20,12 +20,13 @@ import json
 import logging
 import os
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.event import async_track_time_interval
 
 from . import geometry
 from .api import HookiiAccount, HookiiCloudClient, HookiiConfig
@@ -183,6 +184,7 @@ class NeomowCoordinator:
             self.mowers[label] = MowerState(m["serial"], label, m["color"])
             self._serial_to_label[m["serial"]] = label
         self._client: HookiiCloudClient | None = None
+        self._area_timer = None  # periodic zone-list retry (see async_start)
         # Persist the big, slow-to-republish captures (boundary + cut paths) so
         # an HA restart does not blank the map for the minutes-to-hours until
         # the cloud next streams DEVICE_MAP_V2 / ALL_PATH_LIST_V2.
@@ -192,6 +194,10 @@ class NeomowCoordinator:
         "DEVICE_MAP_V2": "device_map",
         "ALL_PATH_LIST_V2": "path_list",
         "ALL_PATH_INDEX_V2": "path_index",
+        # Persist the mowing-zone list too, so it survives restarts even while a
+        # mower is busy (calendar/param times out mid-mow) - otherwise every
+        # restart blanks available_regions until the mower next docks.
+        "AREAS": "areas",
     }
 
     async def async_start(self) -> None:
@@ -206,15 +212,38 @@ class NeomowCoordinator:
         # Populate the mowing-zone list in the background (REST map/data; doesn't
         # block startup and survives the rare MQTT DEVICE_MAP_V2 never arriving).
         self.hass.async_create_task(self.async_refresh_areas())
+        # The calendar/param zone fetch returns code=37 (timeout) while a mower is
+        # actively mowing, so a mower BUSY at startup would keep only its last
+        # region forever. Retry every 10 min for mowers with no zone list yet - it
+        # succeeds the next time that mower is docked/idle, then stops retrying it.
+        # Fixes "available_regions has only the last mowed zone" (Saku/johnniemalm).
+        self._area_timer = async_track_time_interval(
+            self.hass,
+            lambda _now: self.hass.async_create_task(
+                self.async_refresh_areas(only_empty=True)
+            ),
+            timedelta(minutes=10),
+        )
 
     async def async_stop(self) -> None:
+        if self._area_timer is not None:
+            self._area_timer()
+            self._area_timer = None
         if self._client is not None:
             await self.hass.async_add_executor_job(self._client.stop)
             self._client = None
 
-    async def async_refresh_areas(self, label: str | None = None) -> None:
-        """Refresh the cached mowing-zone list (REST map/data) for one or all
-        mowers. Best-effort: failures leave the previous cache intact."""
+    async def async_refresh_areas(
+        self, label: str | None = None, only_empty: bool = False
+    ) -> None:
+        """Refresh the cached mowing-zone list (REST calendar/param) for one or all
+        mowers. Best-effort: failures leave the previous cache intact.
+
+        ``only_empty=True`` skips mowers that already have a zone list - used by the
+        10-min retry timer so a mower that was busy at startup gets retried until it
+        next docks (calendar/param succeeds when idle), without re-hitting the API
+        for mowers already resolved.
+        """
         if self._client is None:
             return
         items = (
@@ -223,6 +252,8 @@ class NeomowCoordinator:
             else list(self.mowers.items())
         )
         for lbl, state in items:
+            if only_empty and state.areas:
+                continue
             try:
                 areas = await self.hass.async_add_executor_job(
                     self._client.get_areas, state.serial
@@ -232,6 +263,7 @@ class NeomowCoordinator:
                 continue
             if areas:
                 state.areas = areas
+                self._schedule_persist(lbl, "AREAS", areas)
                 async_dispatcher_send(
                     self.hass, f"{SIGNAL_MOWER_UPDATED}_{self.entry_id}", lbl
                 )
