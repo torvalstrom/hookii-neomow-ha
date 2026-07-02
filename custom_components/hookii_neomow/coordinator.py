@@ -217,13 +217,19 @@ class NeomowCoordinator:
         # region forever. Retry every 10 min for mowers with no zone list yet - it
         # succeeds the next time that mower is docked/idle, then stops retrying it.
         # Fixes "available_regions has only the last mowed zone" (Saku/johnniemalm).
+        # Must be a coroutine function: HA awaits those in the event loop. The
+        # previous plain sync lambda was dispatched to an executor THREAD, where
+        # hass.async_create_task raises RuntimeError - a full traceback in the
+        # log on every 10-min tick (~5k error lines/day).
         self._area_timer = async_track_time_interval(
             self.hass,
-            lambda _now: self.hass.async_create_task(
-                self.async_refresh_areas(only_empty=True)
-            ),
+            self._async_retry_empty_areas,
             timedelta(minutes=10),
         )
+
+    async def _async_retry_empty_areas(self, _now) -> None:
+        """10-min timer callback: retry zone fetch for mowers still missing zones."""
+        await self.async_refresh_areas(only_empty=True)
 
     async def async_stop(self) -> None:
         if self._area_timer is not None:
