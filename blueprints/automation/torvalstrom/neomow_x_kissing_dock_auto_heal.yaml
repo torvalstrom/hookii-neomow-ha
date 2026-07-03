@@ -138,6 +138,24 @@ blueprint:
             - button
           multiple: false
 
+    mower_entity:
+      name: Mower entity (docked-state guard for Path B)
+      description: >-
+        The integration's **lawn_mower** entity for this mower (e.g.
+        `lawn_mower.neomow`). Path B (kissing dock) only fires while this
+        entity reports `docked`. Without the guard, a mower MOWING in the
+        field satisfies the kissing-dock conditions by accident — charge
+        current is always ~0 A away from the dock, and battery naturally
+        drops below the threshold mid-job — so the blueprint would send it
+        home every 2 minutes (reported by a tester, 2026-07-03). If left
+        empty, Path B is disabled and only the alarm path (Path A) runs.
+      default: ""
+      selector:
+        entity:
+          filter:
+            - domain: lawn_mower
+          multiple: false
+
     battery_threshold:
       name: Battery threshold for kissing-dock path
       description: >-
@@ -213,6 +231,7 @@ variables:
   problem_binary_sensor: !input problem_binary_sensor
   recover_alarm_button: !input recover_alarm_button
   dock_button: !input dock_button
+  mower_entity: !input mower_entity
   battery_threshold: !input battery_threshold
   max_telemetry_age_minutes: !input max_telemetry_age_minutes
   notify_service: !input notify_service
@@ -240,6 +259,13 @@ condition:
             value_template: >-
               {% set c = states(charge_current_sensor) | float(0) %}
               {{ -1 < c < 1 }}
+          - condition: template
+            alias: >-
+              Mower is physically at the dock — away from the dock the charge
+              current is always ~0 A and a mowing battery naturally drops
+              below the threshold, which would send the mower home mid-job
+            value_template: >-
+              {{ mower_entity != '' and states(mower_entity) == 'docked' }}
 
 action:
   - variables:
