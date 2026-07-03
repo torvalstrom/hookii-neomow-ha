@@ -1,5 +1,5 @@
 blueprint:
-  name: Neomow X - Auto-heal failed docking (kissing dock + alarm 514/515/116)
+  name: Neomow X - Auto-heal failed docking (kissing dock + alarm 514/515/116/516)
   description: >
     Self-healing redock + alarm recovery for **Hookii Neomow X** mowers via
     the native [hookii-neomow-ha
@@ -30,16 +30,28 @@ blueprint:
 
 
     - **Path A — explicit alarm:** when the **Problem** binary sensor goes `on`
-    and stays on for 60 s, press the **Clear Exception** button (same as tapping
-    "OK to resolve" in the Hookii app). The Problem sensor trips on *any*
-    `NOTICE_ALARM` `errCode` from the cloud, including `514` (docking failed),
-    `515` (docking failed), and `116` (obstacle at charging station).
+    and stays on for 60 s AND the alarm code is in the configurable
+    docking-related allowlist (default `514`, `515`, `116`, `516`), press the
+    **Clear Exception** button (same as tapping "OK to resolve" in the Hookii
+    app). Alarms outside the allowlist are deliberately NOT auto-cleared —
+    blindly acknowledging e.g. a lift/tilt or blade alarm hides real problems.
+    Requires integration v0.3.3+ (the `alarm_code` attribute on the Problem
+    sensor).
 
-    - **Path B — kissing dock:** when battery is below the configured threshold
-    AND charge current has been flapping inside the [-1, 1] A band for 60 s
-    (mower is sitting on the dock but not drawing power), press the **Return to
-    Dock** button to issue a recharge command — the mower physically backs off
-    and re-attempts docking.
+    - **Path B — kissing dock:** when the mower reports `docked`, battery is
+    below the configured threshold AND charge current has been flapping inside
+    the [-1, 1] A band for 60 s (sitting on the dock without drawing power),
+    press the **Return to Dock** button to issue a recharge command — the mower
+    physically backs off and re-attempts docking.
+
+
+    **Bounded retries with give-up (optional but recommended):** create a
+    `counter` helper and select it below. Each heal attempt increments it; once
+    it reaches *Max attempts* the blueprint stops retrying and sends ONE
+    "gave up — human needed" notification instead of hammering the dock all
+    night. The counter resets automatically as soon as the mower charges
+    normally again (charge current above 1.5 A for 3 minutes). Attempts are
+    also rate-limited to one per *Minimum minutes between attempts*.
 
 
     **Stale-data guard:** both paths are skipped while telemetry is stale. When
@@ -172,6 +184,62 @@ blueprint:
           mode: slider
           step: 1
 
+    auto_clear_codes:
+      name: Alarm codes to auto-clear (Path A allowlist)
+      description: >-
+        Comma-separated Hookii `errCode`s that Path A is allowed to clear
+        automatically. Keep this to docking-related codes: `514` / `515`
+        (docking failed), `116` (obstacle at charging station), `516`
+        (docking-related). Do NOT add lift/tilt/blade codes — auto-clearing
+        those hides real safety problems.
+      default: "514,515,116,516"
+      selector:
+        text:
+          multiline: false
+
+    heal_counter:
+      name: Heal-attempt counter (optional, recommended)
+      description: >-
+        A `counter` helper used to bound retries (Settings → Devices &
+        services → Helpers → Create helper → Counter). Every heal attempt
+        increments it; at *Max attempts* the blueprint stops and sends one
+        "gave up" notification. It resets automatically once the mower
+        charges normally (above 1.5 A for 3 minutes). Leave empty for
+        unbounded retries (the pre-v2 behaviour).
+      default: ""
+      selector:
+        entity:
+          filter:
+            - domain: counter
+          multiple: false
+
+    max_attempts:
+      name: Max attempts before giving up
+      description: >-
+        Only used when a heal-attempt counter is configured. After this many
+        attempts without a successful charge, stop retrying and notify.
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 10
+          mode: slider
+          step: 1
+
+    min_minutes_between_attempts:
+      name: Minimum minutes between attempts
+      description: >-
+        Rate limit between heal attempts, so a redock cycle gets time to
+        finish before the next attempt is considered.
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 30
+          unit_of_measurement: min
+          mode: slider
+          step: 1
+
     max_telemetry_age_minutes:
       name: Max telemetry age (stale-data guard)
       description: >-
@@ -225,6 +293,15 @@ trigger:
     minutes: /2
     id: safety_net
 
+  # Success signal: the mower is charging normally again -> reset the
+  # heal-attempt counter so the budget is available for the next incident.
+  - platform: numeric_state
+    entity_id: !input charge_current_sensor
+    above: 1.5
+    for:
+      minutes: 3
+    id: charging_ok
+
 variables:
   battery_sensor: !input battery_sensor
   charge_current_sensor: !input charge_current_sensor
@@ -233,58 +310,112 @@ variables:
   dock_button: !input dock_button
   mower_entity: !input mower_entity
   battery_threshold: !input battery_threshold
+  auto_clear_codes: !input auto_clear_codes
+  heal_counter: !input heal_counter
+  max_attempts: !input max_attempts
+  min_minutes_between_attempts: !input min_minutes_between_attempts
   max_telemetry_age_minutes: !input max_telemetry_age_minutes
   notify_service: !input notify_service
 
-condition:
-  - condition: template
-    alias: Telemetry is fresh — skip on stale cloud data
-    value_template: >-
-      {% set b = states[battery_sensor] %}
-      {{ b is not none
-         and (now() - b.last_reported).total_seconds() < (max_telemetry_age_minutes | int * 60)
-         and (states(battery_sensor) | float(-1)) > 0 }}
-
-  - condition: or
-    conditions:
-      - condition: state
-        entity_id: !input problem_binary_sensor
-        state: "on"
-      - condition: and
-        conditions:
-          - condition: numeric_state
-            entity_id: !input battery_sensor
-            below: !input battery_threshold
-          - condition: template
-            value_template: >-
-              {% set c = states(charge_current_sensor) | float(0) %}
-              {{ -1 < c < 1 }}
-          - condition: template
-            alias: >-
-              Mower is physically at the dock — away from the dock the charge
-              current is always ~0 A and a mowing battery naturally drops
-              below the threshold, which would send the mower home mid-job
-            value_template: >-
-              {{ mower_entity != '' and states(mower_entity) == 'docked' }}
+condition: []
 
 action:
+  # Success path first: charging normally -> reset the attempt counter.
+  - if:
+      - condition: trigger
+        id: charging_ok
+    then:
+      - if:
+          - condition: template
+            value_template: "{{ heal_counter != '' and (states(heal_counter) | int(0)) > 0 }}"
+        then:
+          - action: counter.reset
+            target:
+              entity_id: !input heal_counter
+      - stop: Charging normally - heal counter reset.
+
   - variables:
-      is_alarm: "{{ is_state(problem_binary_sensor, 'on') }}"
       battery_now: "{{ states(battery_sensor) }}"
       charge_now: "{{ states(charge_current_sensor) }}"
+      alarm_code: "{{ state_attr(problem_binary_sensor, 'alarm_code') | string }}"
+      clear_codes: >-
+        {{ auto_clear_codes.split(',') | map('trim') | reject('eq', '') | list }}
+      telemetry_fresh: >-
+        {% set b = states[battery_sensor] %}
+        {{ b is not none
+           and (now() - b.last_reported).total_seconds() < (max_telemetry_age_minutes | int * 60)
+           and (states(battery_sensor) | float(-1)) > 0 }}
+      rate_ok: >-
+        {{ this.attributes.last_triggered is none
+           or (now() - this.attributes.last_triggered).total_seconds()
+              >= (min_minutes_between_attempts | int * 60) }}
+      heal_worthy_alarm: >-
+        {{ is_state(problem_binary_sensor, 'on') and alarm_code in clear_codes }}
+      kissing_dock: >-
+        {{ mower_entity != ''
+           and states(mower_entity) == 'docked'
+           and (states(battery_sensor) | float(101)) < (battery_threshold | int)
+           and -1 < (states(charge_current_sensor) | float(99)) < 1 }}
+      attempts: "{{ states(heal_counter) | int(0) if heal_counter != '' else 0 }}"
 
+  # Guards: stale telemetry looks exactly like a kissing dock; rate limit
+  # gives each redock cycle time to finish before the next attempt.
+  - if:
+      - condition: template
+        value_template: >-
+          {{ not telemetry_fresh
+             or not rate_ok
+             or not (heal_worthy_alarm or kissing_dock) }}
+    then:
+      - stop: Nothing to heal (or guards not satisfied).
+
+  # Bounded retries: at the budget, send ONE give-up notification and stop.
+  - if:
+      - condition: template
+        value_template: "{{ heal_counter != '' and attempts >= (max_attempts | int) }}"
+    then:
+      - if:
+          - condition: template
+            value_template: "{{ notify_service != '' and attempts == (max_attempts | int) }}"
+        then:
+          - action: "{{ notify_service }}"
+            data:
+              title: Neomow auto-heal GAVE UP
+              message: >-
+                {{ max_attempts }} heal attempts without a successful charge
+                (battery {{ battery_now }}%, charge current {{ charge_now }} A,
+                alarm code {{ alarm_code }}). Human needed - check the mower
+                and dock contacts. The counter resets automatically once it
+                charges normally again.
+          - action: counter.increment
+            target:
+              entity_id: !input heal_counter
+      - stop: Attempt budget exhausted - waiting for a human or a successful charge.
+
+  # Heal: clear a docking-related alarm, or nudge a kissing dock to redock.
   - choose:
       - conditions:
           - condition: template
-            value_template: "{{ is_alarm }}"
+            value_template: "{{ heal_worthy_alarm }}"
         sequence:
           - action: button.press
             target:
               entity_id: !input recover_alarm_button
-    default:
-      - action: button.press
+      - conditions:
+          - condition: template
+            value_template: "{{ kissing_dock }}"
+        sequence:
+          - action: button.press
+            target:
+              entity_id: !input dock_button
+
+  - if:
+      - condition: template
+        value_template: "{{ heal_counter != '' }}"
+    then:
+      - action: counter.increment
         target:
-          entity_id: !input dock_button
+          entity_id: !input heal_counter
 
   - choose:
       - conditions:
@@ -295,9 +426,10 @@ action:
             data:
               title: Neomow auto-healed
               message: >-
-                {%- if is_alarm -%}
-                  Cleared alarm (Clear Exception) at {{ now().strftime('%H:%M') }}.
+                {%- if heal_worthy_alarm -%}
+                  Cleared alarm {{ alarm_code }} (Clear Exception) at {{ now().strftime('%H:%M') }}
                 {%- else -%}
                   Return to Dock issued at {{ now().strftime('%H:%M') }}
-                  (battery {{ battery_now }}% + charge current {{ charge_now }} A — kissing dock).
-                {%- endif %}
+                  (battery {{ battery_now }}% + charge current {{ charge_now }} A - kissing dock)
+                {%- endif -%}
+                {%- if heal_counter != '' %} [attempt {{ attempts + 1 }}/{{ max_attempts }}]{% endif -%}.
