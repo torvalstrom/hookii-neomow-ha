@@ -37,6 +37,21 @@ async def async_get_config_entry_diagnostics(
             "last_update": state.last_update,
             "ha_alarm_active": state.status.get("ha_alarm_active"),
             "ha_alarm_code": state.status.get("ha_alarm_code"),
+            # Zone-list provenance - the usual cause of "only one region" /
+            # "No zone data" is that the REST zone fetch (calendar/param) times
+            # out while the mower is mowing and the pushed map/task never arrived,
+            # so only the live-status current zone is known. These fields show
+            # which sources are populated so that class of report is diagnosable
+            # from the dump alone.
+            "zones": {
+                "areas_count": len(state.areas),
+                "area_names": [a.get("areaName") for a in state.areas],
+                "area_ids": [a.get("areaId") for a in state.areas],
+                "has_device_map": state.device_map is not None,
+                "device_map_at": state.device_map_at,
+                "has_region_task": state.region_task is not None,
+                "status_region": state.status.get("regionName"),
+            },
             # The field names are the key thing for debugging coverage gaps.
             "status_keys": sorted(state.status.keys()),
             "status": async_redact_data(state.status, TO_REDACT),

@@ -130,9 +130,15 @@ class NeomowLawnMower(NeomowEntity, LawnMowerEntity):
         await self.coordinator.async_refresh_areas(self._state.label)
         available = self._state.areas
         if not available:
+            active = self._state.status.get("robotStatus") in {1, 2, 7, 9, 10}
             raise HomeAssistantError(
-                "No zone data for this mower (could not fetch the map). "
-                "Try again in a moment."
+                "No zone data for this mower yet. The selectable zone list is "
+                "fetched from the cloud only while the mower is docked or idle - "
+                "the request times out while it is out mowing"
+                + (" (it is mowing right now)" if active else "")
+                + ". Let the mower dock, then try again: the integration retries "
+                "automatically every 10 minutes and keeps the zone list once it "
+                "succeeds, so this only needs to happen once."
             )
         by_name = {_norm_name(a.get("areaName", "")): a for a in available}
         by_id = {str(a.get("areaId")): a for a in available}
