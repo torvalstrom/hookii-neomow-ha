@@ -14,7 +14,7 @@ blueprint:
     has two spring-loaded "finger" contacts that oxidise over time. Combined,
     this means the mower frequently fails its first dock attempt and either sits
     with `chargeCurrent` flapping around 0 A (kissing the dock but not drawing
-    power), or throws docking alarm `514` / `515` / `116`.
+    power), or throws docking alarm `514` / `515` / `116` / `516`.
 
 
     The earlier Neomow firmware had a built-in self-heal that re-docked
@@ -114,8 +114,9 @@ blueprint:
         The integration's Problem binary sensor (e.g.
         `binary_sensor.neomow_problem`). Goes `on` whenever the Hookii
         cloud sends a `NOTICE_ALARM` with any `errCode` — including `514`
-        / `515` (docking failed) and `116` (obstacle at charging station).
-        Automatically clears once the mower is charging or mowing again.
+        / `515` (docking failed), `116` (obstacle at charging station), and
+        `516` (not charging at dock). Automatically clears once the mower
+        is charging or mowing again.
       selector:
         entity:
           domain:
@@ -331,7 +332,7 @@ action:
         then:
           - action: counter.reset
             target:
-              entity_id: !input heal_counter
+              entity_id: "{{ heal_counter }}"
       - stop: Charging normally - heal counter reset.
 
   - variables:
@@ -346,8 +347,9 @@ action:
            and (now() - b.last_reported).total_seconds() < (max_telemetry_age_minutes | int * 60)
            and (states(battery_sensor) | float(-1)) > 0 }}
       rate_ok: >-
-        {{ this.attributes.last_triggered is none
-           or (now() - this.attributes.last_triggered).total_seconds()
+        {{ heal_counter == ''
+           or states[heal_counter] is none
+           or (now() - states[heal_counter].last_changed).total_seconds()
               >= (min_minutes_between_attempts | int * 60) }}
       heal_worthy_alarm: >-
         {{ is_state(problem_binary_sensor, 'on') and alarm_code in clear_codes }}
@@ -389,7 +391,7 @@ action:
                 charges normally again.
           - action: counter.increment
             target:
-              entity_id: !input heal_counter
+              entity_id: "{{ heal_counter }}"
       - stop: Attempt budget exhausted - waiting for a human or a successful charge.
 
   # Heal: clear a docking-related alarm, or nudge a kissing dock to redock.
@@ -415,7 +417,7 @@ action:
     then:
       - action: counter.increment
         target:
-          entity_id: !input heal_counter
+          entity_id: "{{ heal_counter }}"
 
   - choose:
       - conditions:
