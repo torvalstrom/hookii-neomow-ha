@@ -10,11 +10,12 @@ blueprint:
     **What triggers it**
 
 
-    The Problem binary sensor goes `on` and the lawn mower entity is in the
-    `mowing` state — confirming the alarm came from the field, not the dock.
-    Docking alarms (`514` / `515` / `116`) are handled separately by the
-    *Kissing-dock auto-heal* blueprint; this blueprint deliberately ignores
-    them so the two don't conflict.
+    The Problem binary sensor goes `on` with an `alarm_code` attribute that is
+    **not** a docking fault (`514` / `515` / `116` / `516`). Docking faults are
+    handled by the *Kissing-dock auto-heal* blueprint. This blueprint handles field faults
+    — stopped (`801`), tilted (`823`), slip, blade or wheel fault — including
+    halts where no NOTICE_ALARM code is present (the integration detects those
+    directly from `robotStatus==4` / `runStatusList`).
 
 
     **What it does**
@@ -75,9 +76,8 @@ blueprint:
       name: Lawn mower entity
       description: >-
         The integration's lawn mower entity
-        (e.g. `lawn_mower.cottage_conchita`). Used to confirm the mower was
-        in `mowing` state when the alarm fired, so this blueprint and the
-        kissing-dock blueprint don't both react to the same docking alarm.
+        (e.g. `lawn_mower.cottage_conchita`). Used for the friendly name in
+        the stuck-mower notification title.
       selector:
         entity:
           domain:
@@ -208,6 +208,7 @@ trigger:
 
 variables:
   lawn_mower_entity: !input lawn_mower_entity
+  problem_binary_sensor: !input problem_binary_sensor
   camera_entity: !input camera_entity
   notify_service: !input notify_service
   auto_timeout_minutes: !input auto_timeout_minutes
@@ -224,9 +225,10 @@ condition:
   - condition: state
     entity_id: !input problem_binary_sensor
     state: "on"
-  - condition: state
-    entity_id: !input lawn_mower_entity
-    state: mowing
+  - condition: template
+    value_template: >-
+      {{ state_attr(problem_binary_sensor, 'alarm_code') | string
+         not in ['514', '515', '116', '516'] }}
 
 action:
   - action: button.press
