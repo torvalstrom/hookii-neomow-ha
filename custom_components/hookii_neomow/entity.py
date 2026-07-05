@@ -40,6 +40,8 @@ class NeomowEntity(Entity):
         )
 
     @callback
-    def _handle_update(self, label: str) -> None:
+    def _handle_update(self, label: str, kind: str = "light") -> None:
+        # `kind` (light/full) only matters to the map-card websocket push;
+        # entities re-render their (cheap) state on any update.
         if label == self.label:
             self.async_write_ha_state()

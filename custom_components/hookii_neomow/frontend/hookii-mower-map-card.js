@@ -67,7 +67,31 @@ class HookiiMowerMapCard extends HTMLElement {
     this._unsub = this._hass.connection.subscribeMessage(
       (msg) => {
         if (!msg || !msg.label) return;
-        this._geom[msg.label] = msg.geometry;
+        if (msg.geometry) {
+          // Full snapshot: initial paint + rare boundary/path changes.
+          this._geom[msg.label] = msg.geometry;
+        } else if (msg.partial) {
+          // Light delta (v0.3.17+): robot/status only, ~200 bytes instead of
+          // the full multi-KB geometry on every STATUS. Merge into the cached
+          // snapshot; ignore if none arrived yet (subscribe sends one first).
+          const g = this._geom[msg.label];
+          if (!g) return;
+          g.robot = msg.robot;
+          g.battery = msg.battery;
+          g.work_status = msg.work_status;
+          g.online_status = msg.online_status;
+          g.last_update = msg.last_update;
+          if (msg.trail_last) {
+            g.trail = g.trail || [];
+            const last = g.trail[g.trail.length - 1];
+            if (!last || last[0] !== msg.trail_last[0] || last[1] !== msg.trail_last[1]) {
+              g.trail.push(msg.trail_last);
+              if (g.trail.length > 2000) g.trail.shift();
+            }
+          }
+        } else {
+          return;
+        }
         if (msg.label === this._activeLabel()) this._render();
       },
       { type: "hookii_neomow/subscribe" }

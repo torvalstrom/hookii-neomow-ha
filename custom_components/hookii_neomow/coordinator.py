@@ -136,6 +136,27 @@ class MowerState:
         self.snapshot: bytes | None = None
         self.snapshot_at: str | None = None
 
+    def light_state(self) -> dict[str, Any]:
+        """The small, fast-changing subset of geometry() (robot + status).
+
+        Streamed to map-card subscribers on every STATUS instead of the full
+        snapshot: the boundary + cut-path history are tens-to-hundreds of KB
+        and pushing them ~1.5s per mowing mower flooded slow clients until HA
+        killed the websocket ("Client unable to keep up with pending
+        messages") - phones on the Neomow dashboard went deaf.
+        """
+        robot = None
+        if self.robot_x is not None and self.robot_y is not None:
+            robot = {"x": self.robot_x, "y": self.robot_y, "heading": self.heading}
+        return {
+            "robot": robot,
+            "battery": self.battery,
+            "work_status": self.work_status,
+            "online_status": self.online_status,
+            "last_update": self.last_update,
+            "trail_last": list(self.trail[-1]) if self.trail else None,
+        }
+
     def geometry(self) -> dict[str, Any]:
         """Assemble the raw-coordinate geometry snapshot for the card."""
         robot = None
@@ -271,7 +292,7 @@ class NeomowCoordinator:
                 state.areas = areas
                 self._schedule_persist(lbl, "AREAS", areas)
                 async_dispatcher_send(
-                    self.hass, f"{SIGNAL_MOWER_UPDATED}_{self.entry_id}", lbl
+                    self.hass, f"{SIGNAL_MOWER_UPDATED}_{self.entry_id}", lbl, "light"
                 )
 
     @property
@@ -291,7 +312,7 @@ class NeomowCoordinator:
         # re-evaluates the sensor, flipping it off just after the 30s mark).
         state.status["ha_snapshot_at"] = state.snapshot_at
         async_dispatcher_send(
-            self.hass, f"{SIGNAL_MOWER_UPDATED}_{self.entry_id}", label
+            self.hass, f"{SIGNAL_MOWER_UPDATED}_{self.entry_id}", label, "light"
         )
 
     def _load_persisted(self) -> None:
@@ -335,6 +356,16 @@ class NeomowCoordinator:
         """Called from paho's network thread - marshal onto the HA loop."""
         self.hass.loop.call_soon_threadsafe(self._handle, serial, payload)
 
+    # Message types that change the LARGE map geometry (boundary/paths) and
+    # justify pushing a full snapshot to card subscribers. Everything else
+    # (STATUS, NOTICE_ALARM) only moves the robot/status -> light delta.
+    _FULL_GEOMETRY_TYPES = {
+        "DEVICE_MAP_V2",
+        "ALL_PATH_LIST_V2",
+        "ALL_PATH_INDEX_V2",
+        "REGION_TASK",
+    }
+
     @callback
     def _handle(self, serial: str, payload: dict) -> None:
         label = self._serial_to_label.get(serial)
@@ -342,8 +373,13 @@ class NeomowCoordinator:
             return
         state = self.mowers[label]
         if self._apply(state, payload):
+            kind = (
+                "full"
+                if payload.get("msgType") in self._FULL_GEOMETRY_TYPES
+                else "light"
+            )
             async_dispatcher_send(
-                self.hass, f"{SIGNAL_MOWER_UPDATED}_{self.entry_id}", label
+                self.hass, f"{SIGNAL_MOWER_UPDATED}_{self.entry_id}", label, kind
             )
 
     def _apply(self, state: MowerState, payload: dict[str, Any]) -> bool:
@@ -466,7 +502,28 @@ class NeomowCoordinator:
             state.status["ha_alarm_label"] = label
             return True
 
+        # NOTE on duplicate suppression below: the cloud RE-BROADCASTS the
+        # "capture" messages (ALL_PATH_INDEX_V2, REGION_TASK, sometimes
+        # DEVICE_MAP_V2) continuously - roughly every 1.5s per docked mower -
+        # NOT "rarely" as first assumed. Without content-equality guards every
+        # dup dispatched a full-geometry websocket push to every map card
+        # (50-150 KB x ~0.7/s x mowers x cards - the flood that got phone
+        # clients disconnected) AND re-persisted identical JSON to disk.
+        # Each re-broadcast carries a fresh top-level `ts` envelope stamp, so
+        # equality must ignore it (verified live: consecutive payloads differ
+        # ONLY in .ts).
+
+        def _same(existing: dict | None, incoming: dict) -> bool:
+            if not existing:
+                return False
+            volatile = ("ts", "msgId", "messageId")
+            a = {k: v for k, v in existing.items() if k not in volatile}
+            b = {k: v for k, v in incoming.items() if k not in volatile}
+            return a == b
+
         if msg_type == "DEVICE_MAP_V2":
+            if _same(state.device_map, payload):
+                return False
             if state.device_map_at is None:
                 # One-time, default-level: lets a user confirm the map boundary
                 # actually arrived (vs the card's "Waiting for map data") without
@@ -482,6 +539,8 @@ class NeomowCoordinator:
             return True
 
         if msg_type == "ALL_PATH_LIST_V2":
+            if _same(state.path_list, payload):
+                return False
             new_count = geometry.path_point_count(payload)
             existing = geometry.path_point_count(state.path_list)
             if not existing or new_count >= existing * 0.10:
@@ -492,12 +551,16 @@ class NeomowCoordinator:
             return False
 
         if msg_type == "ALL_PATH_INDEX_V2":
+            if _same(state.path_index, payload):
+                return False
             state.path_index = payload
             state.path_index_at = _now_iso()
             self._schedule_persist(state.label, "ALL_PATH_INDEX_V2", payload)
             return True
 
         if msg_type == "REGION_TASK":
+            if _same(state.region_task, payload):
+                return False
             state.region_task = payload
             return True
 
