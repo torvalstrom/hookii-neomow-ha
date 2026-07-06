@@ -121,7 +121,16 @@ class HookiiMowerMapCard extends HTMLElement {
   _activeLabel() {
     if (this._config && this._config.mower) return this._config.mower;
     const labels = Object.keys(this._geom || {});
-    return labels.length ? labels[0] : null;
+    if (labels.length) return labels[0];
+    // Fresh/recreated card element (HA rebuilds lovelace cards whenever the
+    // websocket drops+reconnects) has an EMPTY in-memory _geom, so with no
+    // `mower:` in the config we used to resolve NO label at all -> _render could
+    // not even look up the durable cache -> it blanked to "Waiting for map
+    // data…" for the 5-15s until the websocket re-answered, then snapped back.
+    // Fall back to the last label we persisted so a recreated card repaints the
+    // cached map INSTANTLY. This is the missing half of the durable cache.
+    const persisted = this._persistedLabels();
+    return persisted.length ? persisted[0] : null;
   }
 
   // --- DOM shell ------------------------------------------------------------
@@ -187,9 +196,39 @@ class HookiiMowerMapCard extends HTMLElement {
     return "hookii_map_v1:" + label;
   }
 
+  _labelIndexKey() {
+    return "hookii_map_labels_v1";
+  }
+
+  // Remember every label we have cached so a freshly-recreated card (empty
+  // in-memory _geom, no `mower:` config) can still resolve WHICH cache key to
+  // repaint from — see _activeLabel().
+  _rememberLabel(label) {
+    try {
+      const s = localStorage.getItem(this._labelIndexKey());
+      const arr = s ? JSON.parse(s) : [];
+      if (!arr.includes(label)) {
+        arr.push(label);
+        localStorage.setItem(this._labelIndexKey(), JSON.stringify(arr));
+      }
+    } catch (e) {
+      // best-effort
+    }
+  }
+
+  _persistedLabels() {
+    try {
+      const s = localStorage.getItem(this._labelIndexKey());
+      return s ? JSON.parse(s) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
   _saveCache(label, geometry) {
     try {
       localStorage.setItem(this._cacheKey(label), JSON.stringify(geometry));
+      this._rememberLabel(label);
       (this._lastCacheSave || (this._lastCacheSave = {}))[label] = Date.now();
     } catch (e) {
       // storage full / disabled (private mode) — cache is best-effort
