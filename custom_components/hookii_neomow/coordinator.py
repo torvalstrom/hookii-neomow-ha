@@ -63,6 +63,12 @@ _DOCKING_CODES = {"514", "515", "516"}
 # runStatusList values seen in normal operation (mowing/docked/charging).
 _NORMAL_RUNSTATUS = {0, 5, 7}
 
+# Minimum seconds between disk writes of the last-known robot fix. STATUS
+# arrives ~1.5s; persisting every packet would hammer the disk. 30s keeps the
+# stored position within a mower-length of reality (it moves ~0.5 m/s) while a
+# graceful shutdown always flushes the very latest fix (see async_stop).
+_FIX_PERSIST_THROTTLE_S = 30.0
+
 
 def _resolve_alarm(status: dict[str, Any]) -> tuple[Any, str]:
     """Return (code, label) for the current fault. `code` is the machine value
@@ -182,6 +188,47 @@ class MowerState:
             },
         }
 
+    def robot_fix(self) -> dict[str, Any]:
+        """The last-known live position + trail, for persistence.
+
+        The boundary/cut-path captures are already persisted, but the robot
+        MARKER (where the mower actually is) and its trail live only in memory.
+        Persisting them means an HA restart while a mower is OFFLINE still shows
+        the last place it reported - the whole point of the map when a mower has
+        gone quiet somewhere in a big garden and needs finding.
+        """
+        return {
+            "robot_x": self.robot_x,
+            "robot_y": self.robot_y,
+            "heading": self.heading,
+            "battery": self.battery,
+            "work_status": self.work_status,
+            "online_status": self.online_status,
+            "last_update": self.last_update,
+            "trail": list(self.trail),
+        }
+
+    def restore_fix(self, fix: dict[str, Any]) -> None:
+        """Apply a persisted robot_fix() on startup (before any live STATUS)."""
+        if not isinstance(fix, dict):
+            return
+        self.robot_x = fix.get("robot_x", self.robot_x)
+        self.robot_y = fix.get("robot_y", self.robot_y)
+        self.heading = fix.get("heading", self.heading)
+        if self.battery is None:
+            self.battery = fix.get("battery")
+        if self.work_status is None:
+            self.work_status = fix.get("work_status")
+        if self.online_status is None:
+            self.online_status = fix.get("online_status")
+        if self.last_update is None:
+            self.last_update = fix.get("last_update")
+        for pt in fix.get("trail") or []:
+            try:
+                self.trail.append([int(pt[0]), int(pt[1])])
+            except (TypeError, ValueError, IndexError):
+                continue
+
 
 class NeomowCoordinator:
     """Owns the cloud connection and per-mower state for one config entry."""
@@ -206,6 +253,8 @@ class NeomowCoordinator:
             self._serial_to_label[m["serial"]] = label
         self._client: HookiiCloudClient | None = None
         self._area_timer = None  # periodic zone-list retry (see async_start)
+        # label -> loop-time of the last robot-fix disk write (throttle).
+        self._last_fix_persist: dict[str, float] = {}
         # Persist the big, slow-to-republish captures (boundary + cut paths) so
         # an HA restart does not blank the map for the minutes-to-hours until
         # the cloud next streams DEVICE_MAP_V2 / ALL_PATH_LIST_V2.
@@ -259,6 +308,13 @@ class NeomowCoordinator:
         if self._client is not None:
             await self.hass.async_add_executor_job(self._client.stop)
             self._client = None
+        # Flush the very latest robot fix for every mower so a planned restart
+        # (HA update, host reboot) reopens on the exact last-known position.
+        for label, state in self.mowers.items():
+            if state.robot_x is not None and state.robot_y is not None:
+                await self.hass.async_add_executor_job(
+                    self._persist, label, "STATUS_FIX", state.robot_fix()
+                )
 
     async def async_refresh_areas(
         self, label: str | None = None, only_empty: bool = False
@@ -327,6 +383,24 @@ class NeomowCoordinator:
                     setattr(state, f"{attr}_at", _now_iso())
                 except (OSError, ValueError) as err:
                     _LOGGER.warning("load %s failed: %s", path, err)
+            # Restore the last-known robot position + trail so the map opens on
+            # the mower's last reported spot even if it is offline at startup.
+            fix_path = os.path.join(self._store_dir, f"{label}_STATUS_FIX.json")
+            if os.path.exists(fix_path):
+                try:
+                    with open(fix_path, encoding="utf-8") as fh:
+                        state.restore_fix(json.load(fh))
+                except (OSError, ValueError) as err:
+                    _LOGGER.warning("load %s failed: %s", fix_path, err)
+
+    def _maybe_persist_fix(self, state: MowerState) -> None:
+        """Throttled disk write of the last-known robot fix (see async_stop for
+        the flush-on-shutdown that always captures the final position)."""
+        now = self.hass.loop.time()
+        if now - self._last_fix_persist.get(state.label, 0.0) < _FIX_PERSIST_THROTTLE_S:
+            return
+        self._last_fix_persist[state.label] = now
+        self._schedule_persist(state.label, "STATUS_FIX", state.robot_fix())
 
     def _persist(self, label: str, msg_type: str, payload: dict) -> None:
         try:
@@ -419,6 +493,9 @@ class NeomowCoordinator:
                 or abs(state.trail[-1][1] - parsed["y"]) > TRAIL_MIN_MOVE_CM
             ):
                 state.trail.append([parsed["x"], parsed["y"]])
+            # Persist the last-known position (throttled) so it survives an HA
+            # restart while the mower is offline - the "find my mower" fix.
+            self._maybe_persist_fix(state)
             # Live fault detection from STATUS (2026-06-20, validated by Tor
             # triggering stop/tilt/slip on a real mower). Faults set
             # robotStatus==4 and add "1" to runStatusList - and crucially do
@@ -524,6 +601,15 @@ class NeomowCoordinator:
         if msg_type == "DEVICE_MAP_V2":
             if _same(state.device_map, payload):
                 return False
+            # Blank-republish guard (parity with ALL_PATH_LIST_V2 below): the
+            # cloud occasionally re-broadcasts an empty/degenerate map. Don't let
+            # it wipe a boundary we already captured - in memory AND on disk -
+            # which used to blank the card until the next (rare) real map.
+            new_b = geometry.extract_boundary(payload)
+            if not (new_b["mowing"] or new_b["exclusion"]):
+                existing_b = geometry.extract_boundary(state.device_map)
+                if existing_b["mowing"] or existing_b["exclusion"]:
+                    return False
             if state.device_map_at is None:
                 # One-time, default-level: lets a user confirm the map boundary
                 # actually arrived (vs the card's "Waiting for map data") without

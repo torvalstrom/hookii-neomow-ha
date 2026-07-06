@@ -69,7 +69,17 @@ class HookiiMowerMapCard extends HTMLElement {
         if (!msg || !msg.label) return;
         if (msg.geometry) {
           // Full snapshot: initial paint + rare boundary/path changes.
-          this._geom[msg.label] = msg.geometry;
+          // Keep last-known: never let an EMPTY snapshot replace a good cached
+          // map. On an HA restart the integration can briefly answer a subscribe
+          // before its persisted captures finish loading; that empty snapshot
+          // used to blank the card ("Waiting for map data…") and stick until the
+          // cloud next streamed a full map (rare - minutes to hours).
+          const prev = this._geom[msg.label];
+          if (prev && this._hasGeometry(prev) && !this._hasGeometry(msg.geometry)) {
+            // ignore empty snapshot, keep the last good geometry
+          } else {
+            this._geom[msg.label] = msg.geometry;
+          }
         } else if (msg.partial) {
           // Light delta (v0.3.17+): robot/status only, ~200 bytes instead of
           // the full multi-KB geometry on every STATUS. Merge into the cached
@@ -344,7 +354,7 @@ window.customCards.push({
 });
 
 console.info(
-  "%c HOOKII-MOWER-MAP-CARD %c v0.2.3 ",
+  "%c HOOKII-MOWER-MAP-CARD %c v0.2.4 ",
   "color:#0f172a;background:#22c55e;font-weight:700;",
   "color:#22c55e;background:#0f172a;"
 );
