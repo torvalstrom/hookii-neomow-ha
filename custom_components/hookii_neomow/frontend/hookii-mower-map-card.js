@@ -27,6 +27,17 @@
 
 const BG = "#0f172a";
 
+// Module-level last-known geometry per label. This survives for the LIFE OF THE
+// PAGE across element recreations - HA tears down + rebuilds lovelace card
+// ELEMENTS whenever the websocket drops+reconnects, giving each rebuilt card an
+// empty per-instance _geom. The per-instance localStorage cache is meant to
+// cover that, but with several large maps (boundary + cut-paths + trail) a
+// setItem can silently blow the ~5MB quota and never persist - so a rebuilt card
+// missed the cache and flashed "Waiting for map data…" for the 5-15s reconnect.
+// This in-memory map has no quota and never fails, so a rebuilt element repaints
+// its last map INSTANTLY. localStorage stays as the cross-reload / cross-tab tier.
+const LAST_GOOD = {};
+
 class HookiiMowerMapCard extends HTMLElement {
   setConfig(config) {
     this._config = Object.assign(
@@ -79,12 +90,15 @@ class HookiiMowerMapCard extends HTMLElement {
             // ignore empty snapshot, keep the last good geometry
           } else {
             this._geom[msg.label] = msg.geometry;
-            // Persist the last good map to localStorage so a page reload / HA
-            // restart / integration hiccup repaints the last-known map INSTANTLY
-            // (before the websocket even answers) instead of flashing/sticking on
-            // "Waiting for map data…". This is the durable cache: we never lose
-            // the last state once we have seen a real map.
-            if (this._hasGeometry(msg.geometry)) this._saveCache(msg.label, msg.geometry);
+            // Mirror the last good map to (1) the module-level in-memory store so
+            // a rebuilt card element repaints instantly with no quota risk, and
+            // (2) localStorage so a full page reload / new tab also repaints the
+            // last-known map before the websocket answers. We NEVER revert to
+            // "Waiting for map data…" once a real map has been captured.
+            if (this._hasGeometry(msg.geometry)) {
+              LAST_GOOD[msg.label] = msg.geometry;
+              this._saveCache(msg.label, msg.geometry);
+            }
           }
         } else if (msg.partial) {
           // Light delta (v0.3.17+): robot/status only, ~200 bytes instead of
@@ -92,6 +106,7 @@ class HookiiMowerMapCard extends HTMLElement {
           // snapshot; ignore if none arrived yet (subscribe sends one first).
           const g = this._geom[msg.label];
           if (!g) return;
+          LAST_GOOD[msg.label] = g; // keep the in-memory store pointing at the live object
           g.robot = msg.robot;
           g.battery = msg.battery;
           g.work_status = msg.work_status;
@@ -153,15 +168,23 @@ class HookiiMowerMapCard extends HTMLElement {
     this._body.style.aspectRatio = ar + " / 1";
 
     const label = this._activeLabel();
-    // Instant repaint from the durable localStorage cache when we have nothing
-    // in memory yet (fresh card, page navigation, HA restart): show the
-    // last-known map immediately, before the websocket subscribe even answers,
-    // so we never sit on "Waiting for map data…" once a map has been captured.
+    // Instant repaint when this element has nothing in memory yet (a fresh card,
+    // or - the common case - a card element HA just rebuilt on a websocket
+    // reconnect): pull the last-known map from the module-level in-memory store
+    // first (survives element recreation, no quota), then fall back to the
+    // localStorage cache (survives a full page reload). Either way we never sit
+    // on "Waiting for map data…" once a real map has been captured this session.
     if (label && (!this._geom || !this._geom[label])) {
-      const cached = this._loadCache(label);
-      if (cached) {
-        this._geom = this._geom || {};
-        this._geom[label] = cached;
+      this._geom = this._geom || {};
+      const mem = LAST_GOOD[label];
+      if (mem) {
+        this._geom[label] = mem;
+      } else {
+        const cached = this._loadCache(label);
+        if (cached) {
+          this._geom[label] = cached;
+          LAST_GOOD[label] = cached;
+        }
       }
     }
     const g = label ? (this._geom || {})[label] : null;
@@ -169,6 +192,15 @@ class HookiiMowerMapCard extends HTMLElement {
     // case) has no live robot position but still has a yard boundary + the cut
     // paths it has driven, which is exactly what's worth showing.
     if (!g || !this._hasGeometry(g)) {
+      // Diagnostic: if this still fires with a map already seen this session,
+      // the console tells us exactly which fallback missed.
+      console.debug(
+        "[hookii-map] waiting - label=%s geom=%s mem=%s cache=%s",
+        label,
+        g ? "empty" : "none",
+        label && LAST_GOOD[label] ? "yes" : "no",
+        label && this._loadCache(label) ? "yes" : "no"
+      );
       this._body.innerHTML = this._placeholder("Waiting for map data…");
       return;
     }
@@ -231,7 +263,13 @@ class HookiiMowerMapCard extends HTMLElement {
       this._rememberLabel(label);
       (this._lastCacheSave || (this._lastCacheSave = {}))[label] = Date.now();
     } catch (e) {
-      // storage full / disabled (private mode) — cache is best-effort
+      // storage full / disabled (private mode) — cache is best-effort. The
+      // module-level LAST_GOOD covers same-session recreation regardless. Log
+      // once so a persistent quota problem is diagnosable from the console.
+      if (!this._quotaWarned) {
+        this._quotaWarned = true;
+        console.debug("[hookii-map] localStorage cache save failed (%s) - using in-memory only", (e && e.name) || e);
+      }
     }
   }
 
