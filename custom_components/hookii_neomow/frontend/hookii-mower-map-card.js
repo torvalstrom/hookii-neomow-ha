@@ -79,6 +79,12 @@ class HookiiMowerMapCard extends HTMLElement {
             // ignore empty snapshot, keep the last good geometry
           } else {
             this._geom[msg.label] = msg.geometry;
+            // Persist the last good map to localStorage so a page reload / HA
+            // restart / integration hiccup repaints the last-known map INSTANTLY
+            // (before the websocket even answers) instead of flashing/sticking on
+            // "Waiting for map data…". This is the durable cache: we never lose
+            // the last state once we have seen a real map.
+            if (this._hasGeometry(msg.geometry)) this._saveCache(msg.label, msg.geometry);
           }
         } else if (msg.partial) {
           // Light delta (v0.3.17+): robot/status only, ~200 bytes instead of
@@ -99,6 +105,10 @@ class HookiiMowerMapCard extends HTMLElement {
               if (g.trail.length > 2000) g.trail.shift();
             }
           }
+          // Keep the cached last-known robot marker + trail reasonably fresh so
+          // a reload after the mower goes quiet shows where it actually stopped,
+          // not a stale spot. Throttled so ~1.5s deltas don't thrash storage.
+          this._saveCacheThrottled(msg.label);
         } else {
           return;
         }
@@ -134,6 +144,17 @@ class HookiiMowerMapCard extends HTMLElement {
     this._body.style.aspectRatio = ar + " / 1";
 
     const label = this._activeLabel();
+    // Instant repaint from the durable localStorage cache when we have nothing
+    // in memory yet (fresh card, page navigation, HA restart): show the
+    // last-known map immediately, before the websocket subscribe even answers,
+    // so we never sit on "Waiting for map data…" once a map has been captured.
+    if (label && (!this._geom || !this._geom[label])) {
+      const cached = this._loadCache(label);
+      if (cached) {
+        this._geom = this._geom || {};
+        this._geom[label] = cached;
+      }
+    }
     const g = label ? (this._geom || {})[label] : null;
     // Render whenever ANY geometry exists — a docked/offline mower (the common
     // case) has no live robot position but still has a yard boundary + the cut
@@ -153,6 +174,43 @@ class HookiiMowerMapCard extends HTMLElement {
       (b.mowing && b.mowing.length) ||
       (b.exclusion && b.exclusion.length)
     );
+  }
+
+  // --- durable cache (localStorage) ----------------------------------------
+  // The in-memory _geom is lost whenever the card element is torn down (page
+  // reload, tab switch, HA restart). Mirroring the last good map to
+  // localStorage means the card repaints it instantly on next load and NEVER
+  // reverts to "Waiting for map data…" once a real map has been captured -
+  // even if the integration is momentarily down and answers slowly (or not).
+
+  _cacheKey(label) {
+    return "hookii_map_v1:" + label;
+  }
+
+  _saveCache(label, geometry) {
+    try {
+      localStorage.setItem(this._cacheKey(label), JSON.stringify(geometry));
+      (this._lastCacheSave || (this._lastCacheSave = {}))[label] = Date.now();
+    } catch (e) {
+      // storage full / disabled (private mode) — cache is best-effort
+    }
+  }
+
+  _saveCacheThrottled(label) {
+    const now = Date.now();
+    const last = (this._lastCacheSave || (this._lastCacheSave = {}))[label] || 0;
+    if (now - last < 15000) return;
+    const g = this._geom && this._geom[label];
+    if (g && this._hasGeometry(g)) this._saveCache(label, g);
+  }
+
+  _loadCache(label) {
+    try {
+      const s = localStorage.getItem(this._cacheKey(label));
+      return s ? JSON.parse(s) : null;
+    } catch (e) {
+      return null;
+    }
   }
 
   _placeholder(text) {
