@@ -530,9 +530,14 @@ class HookiiCloudClient:
         try:
             if action == "start":
                 # Two-step: cmd=7 pre-check (resume-from-breakpoints is the safe
-                # default), then cmd=6 execute.
-                _cmd_start_stop(self.cfg, self.acct, serial, model, 7, region_list or [])
-                _cmd_start_stop_polled(self.cfg, self.acct, serial, model, 6, region_list or [])
+                # default), then cmd=6 execute. Pass region_list through as-is -
+                # coercing an unset (None) selection to [] would attach an EMPTY
+                # regionList to the payload, which the cloud reads as "mow these
+                # zero zones" (a silent no-op) instead of "resume everything",
+                # so a plain Start after clearing an alarm would clear the
+                # exception but never actually move the mower.
+                _cmd_start_stop(self.cfg, self.acct, serial, model, 7, region_list)
+                _cmd_start_stop_polled(self.cfg, self.acct, serial, model, 6, region_list)
             elif action == "pause":
                 _cmd_start_stop_polled(self.cfg, self.acct, serial, model, 3)
             elif action in ("return", "dock", "recharge"):
