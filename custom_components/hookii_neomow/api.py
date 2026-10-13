@@ -231,6 +231,12 @@ def _post(cfg: HookiiConfig, acct: HookiiAccount, path: str, body: dict) -> dict
             r = requests.post(
                 url, json=body, headers=hookii_headers(acct.jwt), timeout=20, verify=False
             )
+        except (requests.Timeout, requests.ConnectionError) as err:
+            # The Hookii cloud regularly stalls for a few seconds (it also answers
+            # code=37 "command timeout" when the mower itself does not respond).
+            # That is an expected network condition, not a bug: one line, no traceback.
+            _LOGGER.warning("[%s] POST %s transport error (try %d): %s", acct.label, path, attempt, err)
+            return {}
         except requests.RequestException:
             _LOGGER.exception("[%s] POST %s transport error (try %d)", acct.label, path, attempt)
             return {}
