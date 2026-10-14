@@ -57,9 +57,13 @@ blueprint:
     stuck on something — sending any movement command makes it worse.
 
 
-    **mode: single** — while the automation is waiting for your tap, new
-    triggers (including a safety-net re-alarm) are held off. Once you act
-    (or ignore), the automation exits and is ready for the next event.
+    **mode: restart** — a fresh stuck event always supersedes an older one
+    still waiting for your tap. This must NOT be `single`: the mower can
+    self-recover during the snapshot + 8 s delay, i.e. before the wait below
+    starts listening, and the `Problem → off` transition is then missed. Under
+    `single` that leaves the automation parked in its wait (up to 24 h when
+    auto-timeout is disabled) and every later stuck event is silently dropped —
+    observed in the field blocking a real stuck alarm for 4.5 hours.
 
 
     **Prerequisites**
@@ -197,7 +201,7 @@ blueprint:
         text:
           multiline: false
 
-mode: single
+mode: restart
 
 trigger:
   - platform: state
@@ -256,6 +260,19 @@ action:
                     title: Return to dock
                   - action: "{{ action_ignore }}"
                     title: Ignore
+
+  # Close the self-recovery race. The snapshot press is a REST round-trip and
+  # the delay above is 8 s, so the mower can clear its own fault BEFORE the
+  # wait below starts listening — the `Problem -> off` state trigger only sees
+  # transitions that happen while it is armed, so that recovery is missed and
+  # the wait then blocks until the NEXT fault clears (up to 24 h). Re-check the
+  # sensor here and bail out if it already cleared.
+  - if:
+      - condition: state
+        entity_id: !input problem_binary_sensor
+        state: "off"
+    then:
+      - stop: Mower self-recovered before the wait armed.
 
   - wait_for_trigger:
       - platform: event
