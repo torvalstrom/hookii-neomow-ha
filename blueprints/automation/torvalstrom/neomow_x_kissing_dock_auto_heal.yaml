@@ -346,11 +346,25 @@ action:
         {{ b is not none
            and (now() - b.last_reported).total_seconds() < (max_telemetry_age_minutes | int * 60)
            and (states(battery_sensor) | float(-1)) > 0 }}
+      # Rate limit on the heal BUTTONS, not on the counter. Gating on the
+      # counter meant `heal_counter == ''` (the default) short-circuited this to
+      # true, so "Minimum minutes between attempts" was silently ignored by
+      # every install that had not created a counter helper - the 2-minute
+      # safety net could then press a heal button every 2 minutes indefinitely,
+      # with no give-up notification (that is counter-gated too).
+      #
+      # Read each button's STATE, which for a button entity IS the ISO timestamp
+      # of its last press. Do NOT use last_changed here: reloading automations
+      # or restarting HA re-creates the entity and resets last_changed to the
+      # reload time, so it reports "just pressed" when nothing was pressed
+      # (measured: last_changed 48 s after a reload, while the real presses were
+      # 8 and 14 days old). as_datetime yields none for unknown/unavailable, so
+      # a never-pressed button is rejected and the first attempt is allowed.
       rate_ok: >-
-        {{ heal_counter == ''
-           or states[heal_counter] is none
-           or (now() - states[heal_counter].last_changed).total_seconds()
-              >= (min_minutes_between_attempts | int * 60) }}
+        {% set t = [states(recover_alarm_button), states(dock_button)]
+                   | map('as_datetime') | reject('none') | list %}
+        {{ not t or (now() - (t | max)).total_seconds()
+           >= (min_minutes_between_attempts | int * 60) }}
       heal_worthy_alarm: >-
         {{ is_state(problem_binary_sensor, 'on') and alarm_code in clear_codes }}
       kissing_dock: >-
