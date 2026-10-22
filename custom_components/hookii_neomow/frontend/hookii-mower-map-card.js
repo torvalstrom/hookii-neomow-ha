@@ -1,13 +1,13 @@
 /*
- * Hookii Neomow Map card — native, dependency-free Lovelace card.
+ * Hookii Neomow Map card - native, dependency-free Lovelace card.
  *
  * Renders the live yard/mower SVG client-side from geometry streamed by the
  * `hookii_neomow` integration over Home Assistant's authenticated websocket
  * (`hookii_neomow/subscribe`). No iframe, no external host, no MQTT in the
- * browser — works identically on HAOS and Container/Core installs.
+ * browser - works identically on HAOS and Container/Core installs.
  *
  * Deliberately written as a plain custom element (no LitElement / framework
- * import) so it does not couple to HA frontend internals — the main cause of
+ * import) so it does not couple to HA frontend internals - the main cause of
  * custom cards breaking across monthly HA releases. The only HA API it touches
  * is the stable, documented `hass.connection.subscribeMessage`.
  *
@@ -188,7 +188,7 @@ class HookiiMowerMapCard extends HTMLElement {
       }
     }
     const g = label ? (this._geom || {})[label] : null;
-    // Render whenever ANY geometry exists — a docked/offline mower (the common
+    // Render whenever ANY geometry exists - a docked/offline mower (the common
     // case) has no live robot position but still has a yard boundary + the cut
     // paths it has driven, which is exactly what's worth showing.
     if (!g || !this._hasGeometry(g)) {
@@ -234,7 +234,7 @@ class HookiiMowerMapCard extends HTMLElement {
 
   // Remember every label we have cached so a freshly-recreated card (empty
   // in-memory _geom, no `mower:` config) can still resolve WHICH cache key to
-  // repaint from — see _activeLabel().
+  // repaint from - see _activeLabel().
   _rememberLabel(label) {
     try {
       const s = localStorage.getItem(this._labelIndexKey());
@@ -263,7 +263,7 @@ class HookiiMowerMapCard extends HTMLElement {
       this._rememberLabel(label);
       (this._lastCacheSave || (this._lastCacheSave = {}))[label] = Date.now();
     } catch (e) {
-      // storage full / disabled (private mode) — cache is best-effort. The
+      // storage full / disabled (private mode) - cache is best-effort. The
       // module-level LAST_GOOD covers same-session recreation regardless. Log
       // once so a persistent quota problem is diagnosable from the console.
       if (!this._quotaWarned) {
@@ -439,7 +439,7 @@ class HookiiMowerMapCard extends HTMLElement {
       );
     }
 
-    // Robot marker + heading arrow — only when the mower is reporting a live
+    // Robot marker + heading arrow - only when the mower is reporting a live
     // position. A docked/offline mower renders the yard + coverage without it.
     if (robot) {
       const rsvg = toSvg(robot[0], robot[1]);

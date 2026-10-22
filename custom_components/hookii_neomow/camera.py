@@ -1,4 +1,4 @@
-"""Camera entity for Hookii Neomow — shows the last on-demand snapshot.
+"""Camera entity for Hookii Neomow - shows the last on-demand snapshot.
 
 The mower only produces a photo when asked (REST capture), so this entity does
 NOT poll the cloud; it serves the most recent snapshot captured by the

@@ -81,7 +81,7 @@ BINARY_SENSORS: tuple[NeomowBinaryDescription, ...] = (
             "age_seconds": (lambda a: round(a, 1) if a is not None else None)(_snapshot_age(st)),
         },
     ),
-    # Error/alarm — raised from live STATUS halt detection (robotStatus==4 /
+    # Error/alarm - raised from live STATUS halt detection (robotStatus==4 /
     # "1" in runStatusList) and enriched with the precise errCode from
     # NOTICE_ALARM. Motion-halt faults clear when the halt clears; docking
     # faults (514/515/516) persist until the mower charges/mows again.

@@ -12,8 +12,8 @@ blueprint:
 
     The Problem binary sensor goes `on` with an `alarm_code` attribute that is
     **not** a docking fault (`514` / `515` / `116` / `516`). Docking faults are
-    handled by the *Kissing-dock auto-heal* blueprint. This blueprint handles field faults
-    — stopped (`801`), tilted (`823`), slip, blade or wheel fault — including
+    handled by the *Kissing-dock auto-heal* blueprint. This blueprint handles field faults -
+    stopped (`801`), tilted (`823`), slip, blade or wheel fault - including
     halts where no NOTICE_ALARM code is present (the integration detects those
     directly from `robotStatus==4` / `runStatusList`).
 
@@ -30,11 +30,11 @@ blueprint:
     4. Waits for your tap, or for the mower to self-recover (Problem clears
     on its own).
 
-    5. **Start mowing** — presses Clear Exception then Start.
+    5. **Start mowing** - presses Clear Exception then Start.
 
-    6. **Return to dock** — sends the mower home (breakpoints kept).
+    6. **Return to dock** - sends the mower home (breakpoints kept).
 
-    7. **Ignore** — leaves the mower where it is; you'll handle it manually.
+    7. **Ignore** - leaves the mower where it is; you'll handle it manually.
 
 
     **Auto-timeout (optional)**
@@ -43,26 +43,26 @@ blueprint:
     If no notification tap arrives within the configured timeout, an
     auto-timeout button of your choosing is pressed. Three sensible options:
 
-    - `button.<name>_return_to_dock` — navigates home, breakpoints **kept**
+    - `button.<name>_return_to_dock` - navigates home, breakpoints **kept**
     (mower resumes from where it stopped next session).
 
-    - `button.<name>_stop_keep_progress` — halts in place, breakpoints
-    **kept** (safe if the mower may be entangled — no movement command).
+    - `button.<name>_stop_keep_progress` - halts in place, breakpoints
+    **kept** (safe if the mower may be entangled - no movement command).
 
-    - `button.<name>_stop_clear_progress` — halts in place, breakpoints
+    - `button.<name>_stop_clear_progress` - halts in place, breakpoints
     **cleared** (starts a full fresh mow next time).
 
 
     Leave auto-timeout at **0** (disabled) if the mower could be physically
-    stuck on something — sending any movement command makes it worse.
+    stuck on something - sending any movement command makes it worse.
 
 
-    **mode: restart** — a fresh stuck event always supersedes an older one
+    **mode: restart** - a fresh stuck event always supersedes an older one
     still waiting for your tap. This must NOT be `single`: the mower can
     self-recover during the snapshot + 8 s delay, i.e. before the wait below
     starts listening, and the `Problem → off` transition is then missed. Under
     `single` that leaves the automation parked in its wait (up to 24 h when
-    auto-timeout is disabled) and every later stuck event is silently dropped —
+    auto-timeout is disabled) and every later stuck event is silently dropped -
     observed in the field blocking a real stuck alarm for 4.5 hours.
 
 
@@ -165,7 +165,7 @@ blueprint:
       description: >-
         Service to send the stuck-mower notification
         (e.g. `notify.mobile_app_your_phone`). Must support actionable
-        notifications — requires the HA Companion app on iOS or Android.
+        notifications - requires the HA Companion app on iOS or Android.
       default: ""
       selector:
         text:
@@ -176,7 +176,7 @@ blueprint:
       description: >-
         Minutes to wait for a notification tap before the auto-timeout
         button (below) is pressed. Set to **0** to wait indefinitely.
-        Do **not** enable if the mower may be physically entangled — a
+        Do **not** enable if the mower may be physically entangled - a
         movement command won't help.
       default: 0
       selector:
@@ -192,9 +192,9 @@ blueprint:
       description: >-
         Entity ID of the button to press when the auto-timeout fires. Only
         used when auto-timeout is > 0. Paste one of:
-        `button.<name>_return_to_dock` — navigates home, breakpoints kept;
-        `button.<name>_stop_keep_progress` — stops in place, breakpoints kept;
-        `button.<name>_stop_clear_progress` — stops in place, breakpoints cleared.
+        `button.<name>_return_to_dock` - navigates home, breakpoints kept;
+        `button.<name>_stop_keep_progress` - stops in place, breakpoints kept;
+        `button.<name>_stop_clear_progress` - stops in place, breakpoints cleared.
         Leave blank if auto-timeout is disabled.
       default: ""
       selector:
@@ -250,7 +250,7 @@ action:
           - action: "{{ notify_service }}"
             data:
               title: "{{ mower_name }} is stuck"
-              message: Stopped in the field — check the snapshot and tap an action.
+              message: Stopped in the field - check the snapshot and tap an action.
               data:
                 image: "/api/camera_proxy/{{ camera_entity }}"
                 actions:
@@ -263,7 +263,7 @@ action:
 
   # Close the self-recovery race. The snapshot press is a REST round-trip and
   # the delay above is 8 s, so the mower can clear its own fault BEFORE the
-  # wait below starts listening — the `Problem -> off` state trigger only sees
+  # wait below starts listening - the `Problem -> off` state trigger only sees
   # transitions that happen while it is armed, so that recovery is missed and
   # the wait then blocks until the NEXT fault clears (up to 24 h). Re-check the
   # sensor here and bail out if it already cleared.

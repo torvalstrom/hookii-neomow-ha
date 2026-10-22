@@ -31,7 +31,7 @@ def _norm_name(value: object) -> str:
 
     Without NFC normalisation a name typed on an iOS/macOS keyboard (which
     often produces a DECOMPOSED 'a' + combining diaeresis) fails to match the
-    cloud's COMPOSED 'ä' even though they look identical — so an accented zone
+    cloud's COMPOSED 'ä' even though they look identical - so an accented zone
     name like 'ylätaka' is rejected as an unknown zone. casefold() handles the
     case-insensitive comparison."""
     return unicodedata.normalize("NFC", str(value)).strip().casefold()
