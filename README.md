@@ -94,31 +94,39 @@ variable. The key idea: trigger on `docked` so each zone starts from idle.)
 ## Error & fault detection
 
 The **error** binary sensor (`binary_sensor.neomow_<serial>_problem`) turns on when
-the mower needs attention, and exposes two attributes:
+the mower needs attention, and exposes three attributes:
 
-- `alarm_label` — a concise human description with the Hookii error code in
-  parentheses, e.g. `Stopped (801)`, `Tilted (823)`, `Not charging at dock (516)`.
-  This is the single source of truth — point dashboards/notifications at it.
-- `alarm_code` — the raw code for automations to branch on (the numeric Hookii
-  `errCode` when known, else a fault-class marker like `lift` / `halt`).
+- `alarm_label` - a concise description with the Hookii error code in
+  parentheses, e.g. `Emergency stop pressed (801)`, `Lifted (822)`,
+  `Docking failed - check station power (516)`. Point dashboards and
+  notifications at it. It follows the language Home Assistant is configured
+  with (English and Danish are included).
+- `alarm_code` - the raw code for automations to branch on (the numeric Hookii
+  `errCode` when known, else a fault-class marker like `lift` / `halt`). The UI
+  shows it translated, e.g. `Lifted (822)`; templates still get `822`.
+- `alarm_description` - Hookii's own (English) notice text for the code, i.e.
+  the sentence the Hookii app shows, with the instructions to clear it.
 
 Two complementary signals feed it:
 
-1. **Live STATUS** — a motion halt (`robotStatus == 4` / `1` in `runStatusList`) is
+1. **Live STATUS** - a motion halt (`robotStatus == 4` / `1` in `runStatusList`) is
    detected immediately, including faults the cloud never raises a notice for
    (stop button, tilt, wheel slip). When no code is present the label is derived
    from the mower's own sensor flags (lift hall, bumper, drive/blade motor).
-2. **Cloud notices** — the MQTT `NOTICE_ALARM` summary carries the precise
-   `errCode` for the latest unread notice; docking/charging faults (`514` / `515`
-   / `516`) that don't halt the mower are caught this way and persist until it
-   charges or mows again. Stale unread notices are ignored — only a notice newer
-   than the last one handled raises an alarm.
+2. **Cloud notices** - the MQTT `NOTICE_ALARM` summary carries the precise
+   `errCode` for the latest unread notice; docking/charging faults (`513` /
+   `514` / `515` / `516` / `528`) that don't halt the mower are caught this way
+   and persist until it charges or mows again. Stale unread notices are
+   ignored - only a notice newer than the last one handled raises an alarm.
+   Status and account notices (e.g. `511` Charging, `502` Mowing started,
+   `16` Mower offline) never raise the alarm.
 
-The fault *text* is resolved server-side by Hookii, so this integration ships its
-own concise wording (Hookii's translations are often confusing) and always embeds
-the reported code. Confirmed codes so far: `801` stopped, `823` tilted, `516` not
-charging at dock, `514` / `515` docking failed. A simple `automation` +
-`input_text` "capture error log" can record codes you encounter in the field.
+**Error code table.** `custom_components/hookii_neomow/error_codes.py` maps all
+238 codes Hookii publishes notice texts for (101-1076 mower alarms plus 10-24
+account/app notices) to a kind (fault / warning / info / notice), a short label
+and Hookii's official English text. The official texts are the ones the Hookii
+app downloads from the Hookii cloud's language service; the short labels and
+the Danish translations are ours. Only code 107 has no official text.
 
 A full dump of a mower's live state is available via **Settings → Devices &
 Services → Hookii Neomow → ⋮ → Download diagnostics** (coordinates + serials
@@ -137,7 +145,7 @@ redacted).
    - **Cloud environment** — `beta` for most accounts, `prod` if your account
      lives on the production cloud.
    - **Mower serial numbers** *(optional)* — only needed if no mowers are found
-     automatically. Comma-separated, e.g. `HKX1EB100JD25010115, HKX2EB100JD24080170`.
+     automatically. Comma-separated, e.g. `HKX1EB100XXXXXXXXXX, HKX2EB100XXXXXXXXXX`.
      Find them in the Hookii app under each mower's details.
 
 ## Add the map to a dashboard

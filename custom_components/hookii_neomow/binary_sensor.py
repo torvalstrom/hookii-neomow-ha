@@ -84,17 +84,21 @@ BINARY_SENSORS: tuple[NeomowBinaryDescription, ...] = (
     # Error/alarm - raised from live STATUS halt detection (robotStatus==4 /
     # "1" in runStatusList) and enriched with the precise errCode from
     # NOTICE_ALARM. Motion-halt faults clear when the halt clears; docking
-    # faults (514/515/516) persist until the mower charges/mows again.
-    # `alarm_code` is the numeric Hookii errCode when known (e.g. 801 stop,
-    # 823 tilt, 516 not-charging-at-dock) so automations can branch on it.
+    # faults (513-516, 528) persist until the mower charges/mows again.
+    # `alarm_code` is the numeric Hookii errCode when known (e.g. 801
+    # emergency stop, 822 lifted, 516 docking failed) so automations can branch
+    # on it; its value is translated in the UI via translations/<lang>.json.
+    # `alarm_description` is Hookii's own (English) notice text for the code.
     NeomowBinaryDescription(
         key="error",
+        translation_key="error",
         device_class=BinarySensorDeviceClass.PROBLEM,
         icon="mdi:alert-circle",
         is_on_fn=lambda s: bool(s.get("ha_alarm_active")),
         attrs_fn=lambda s: {
             "alarm_code": s.get("ha_alarm_code"),
             "alarm_label": s.get("ha_alarm_label"),
+            "alarm_description": s.get("ha_alarm_description"),
         },
     ),
 )

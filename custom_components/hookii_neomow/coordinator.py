@@ -27,14 +27,17 @@ from uuid import uuid4
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.translation import async_get_translations
 
 from . import geometry
 from .api import HookiiAccount, HookiiCloudClient, HookiiConfig
 from .const import (
+    DOMAIN,
     SIGNAL_MOWER_UPDATED,
     TRAIL_MAX,
     TRAIL_MIN_MOVE_CM,
 )
+from .error_codes import ERROR_CODES, NON_FAULT_KINDS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,23 +46,32 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# Concise English texts (deliberately shorter/clearer than Hookii's own
-# wording, which Tor finds confusing). The fault TEXT is resolved server-side by
-# Hookii (the MQTT NOTICE_ALARM carries only the numeric errCode + i18n key, not
-# the prose; the APK's en.json holds API/UI strings, not device-fault text), so
-# this table is built from codes we confirm live rather than scraped. Codes
-# marked CONFIRMED were observed end-to-end on Tor's mower 2026-06-20.
-_ERRCODE_TEXT = {
-    "801": "Stopped",            # CONFIRMED - stop button pressed
-    "823": "Tilted",             # CONFIRMED - mower tilted/lifted off level
-    "514": "Docking failed", "515": "Docking failed",
-    "516": "Not charging at dock",   # greenhouse kissing-dock (Hookii push code)
+# errCode -> concise English label, for every code Hookii publishes a notice
+# text for (see error_codes.py for the source). The MQTT NOTICE_ALARM carries
+# only the numeric errCode + i18n keys; the app renders the text from Hookii's
+# language service, which is where the official texts in error_codes.py come
+# from. The labels are deliberately shorter than Hookii's own sentences; the
+# full official sentence is exposed separately as `alarm_description`.
+_ERRCODE_TEXT = {code: short for code, (_kind, short, _text) in ERROR_CODES.items()}
+# errCode -> Hookii's official English notice text ("" when Hookii has none).
+_ERRCODE_DESCRIPTION = {code: text for code, (_kind, _short, text) in ERROR_CODES.items()}
+# Codes whose cloud notice is a status/account message, not a fault.
+_NON_FAULT_CODES = {
+    code for code, (kind, _short, _text) in ERROR_CODES.items() if kind in NON_FAULT_KINDS
 }
+# Translation key prefix for the per-code labels (error binary sensor,
+# `alarm_code` attribute states) - used to localise `alarm_label` to the
+# language Home Assistant is configured with.
+_LABEL_TRANSLATION_PREFIX = (
+    f"component.{DOMAIN}.entity.binary_sensor.error.state_attributes.alarm_code.state."
+)
 # errCodes whose alarm should persist until the mower is *actually* OK again
 # (charging/mowing), not merely until the motion-halt clears. Docking/charging
 # faults leave the mower docked-but-idle, so a halt-cleared check would drop them
 # too early; motion-halt faults (stop/tilt/slip) clear with the halt.
-_DOCKING_CODES = {"514", "515", "516"}
+# 513/528 are the other "docking failed" variants (LiDAR/reflector dirty,
+# generic) - same docked-but-idle situation as 514/515/516.
+_DOCKING_CODES = {"513", "514", "515", "516", "528"}
 # runStatusList values seen in normal operation (mowing/docked/charging).
 _NORMAL_RUNSTATUS = {0, 5, 7}
 
@@ -70,11 +82,15 @@ _NORMAL_RUNSTATUS = {0, 5, 7}
 _FIX_PERSIST_THROTTLE_S = 30.0
 
 
-def _resolve_alarm(status: dict[str, Any]) -> tuple[Any, str]:
+def _resolve_alarm(
+    status: dict[str, Any], labels: dict[str, str] | None = None
+) -> tuple[Any, str]:
     """Return (code, label) for the current fault. `code` is the machine value
     (NOTICE errCode, or a derived marker for sensor-detected halts) kept for
     automations; `label` is a concise human text that always embeds the
-    MQTT-reported code in parentheses, e.g. 'Lifted (822)' or 'Stopped (1)'."""
+    MQTT-reported code in parentheses, e.g. 'Lifted (822)' or 'Stopped (1)'.
+    `labels` optionally overrides the English per-code label (localised
+    labels loaded from the integration's translations)."""
     notice = status.get("ha_notice_errcode")
     nc = str(notice) if notice else None
     ss = status.get("sensorStatus")
@@ -84,9 +100,10 @@ def _resolve_alarm(status: dict[str, Any]) -> tuple[Any, str]:
     # Code shown in parens: prefer the precise NOTICE errCode (e.g. 801/823),
     # else fall back to the runStatusList halt marker that STATUS reported.
     disp = nc or (",".join(str(x) for x in halt_codes) or "stopped")
-    # Known errCode -> our own concise text.
+    # Known errCode -> our own concise text (localised when available).
     if nc and nc in _ERRCODE_TEXT:
-        return nc, f"{_ERRCODE_TEXT[nc]} ({disp})"
+        text = (labels or {}).get(nc) or _ERRCODE_TEXT[nc]
+        return nc, f"{text} ({disp})"
     # Unknown/absent errCode: derive a meaningful description from the human
     # sensorStatus flags, still embedding the most precise code we have. The
     # alarm_code stays the numeric errCode when present (automations branch on
@@ -253,6 +270,9 @@ class NeomowCoordinator:
             self._serial_to_label[m["serial"]] = label
         self._client: HookiiCloudClient | None = None
         self._area_timer = None  # periodic zone-list retry (see async_start)
+        # errCode -> localised short label (HA's configured language), loaded
+        # from translations/<lang>.json in async_start; empty = English.
+        self._alarm_labels: dict[str, str] = {}
         # label -> loop-time of the last robot-fix disk write (throttle).
         self._last_fix_persist: dict[str, float] = {}
         # Persist the big, slow-to-republish captures (boundary + cut paths) so
@@ -272,6 +292,7 @@ class NeomowCoordinator:
 
     async def async_start(self) -> None:
         """Load persisted captures, then connect to the Hookii cloud."""
+        await self._async_load_alarm_labels()
         await self.hass.async_add_executor_job(self._load_persisted)
         self._client = HookiiCloudClient(self.cfg, self.acct, self._on_cloud_message)
         # paho's connect + loop_start are blocking-ish; run off the loop.
@@ -296,6 +317,30 @@ class NeomowCoordinator:
             self._async_retry_empty_areas,
             timedelta(minutes=10),
         )
+
+    async def _async_load_alarm_labels(self) -> None:
+        """Load the per-code alarm labels in HA's configured language, so
+        `alarm_label` reads e.g. 'Løftet (822)' on a Danish installation.
+        Falls back to the built-in English labels on any problem."""
+        language = self.hass.config.language or "en"
+        if language == "en":
+            return
+        try:
+            strings = await async_get_translations(
+                self.hass, language, "entity", {DOMAIN}
+            )
+        except Exception:  # noqa: BLE001 - labels are cosmetic, never fatal
+            _LOGGER.debug("could not load %s alarm labels", language, exc_info=True)
+            return
+        # The translated attribute state reads "<label> (<code>)" so the UI keeps
+        # showing the number; strip that suffix - _resolve_alarm adds the code.
+        n = len(_LABEL_TRANSLATION_PREFIX)
+        labels: dict[str, str] = {}
+        for key, text in strings.items():
+            if key.startswith(_LABEL_TRANSLATION_PREFIX) and text:
+                code = key[n:]
+                labels[code] = text.removesuffix(f" ({code})")
+        self._alarm_labels = labels
 
     async def _async_retry_empty_areas(self, _now) -> None:
         """10-min timer callback: retry zone fetch for mowers still missing zones."""
@@ -456,6 +501,14 @@ class NeomowCoordinator:
                 self.hass, f"{SIGNAL_MOWER_UPDATED}_{self.entry_id}", label, kind
             )
 
+    def _raise_alarm(self, state: MowerState) -> None:
+        """Mark the mower's alarm active with its code, label and description."""
+        code, label = _resolve_alarm(state.status, self._alarm_labels)
+        state.status["ha_alarm_active"] = True
+        state.status["ha_alarm_code"] = code
+        state.status["ha_alarm_label"] = label
+        state.status["ha_alarm_description"] = _ERRCODE_DESCRIPTION.get(str(code)) or None
+
     def _apply(self, state: MowerState, payload: dict[str, Any]) -> bool:
         """Update one mower from a decoded payload. Returns True if changed."""
         msg_type = payload.get("msgType", "?")
@@ -513,7 +566,7 @@ class NeomowCoordinator:
                 state.status.get("ha_is_charging")
                 or state.status.get("ha_state") == "mowing"
             )
-            # Docking/charging NOTICE faults (514/515/516) leave the mower
+            # Docking/charging NOTICE faults (_DOCKING_CODES) leave the mower
             # docked-but-idle, so they must persist until it is actually OK again
             # (charging/mowing) - a halt-cleared check would drop them too early.
             # Motion-halt faults (stop/tilt/slip) clear as soon as the halt
@@ -522,14 +575,12 @@ class NeomowCoordinator:
                 notice is not None and str(notice) in _DOCKING_CODES and not recovered
             )
             if halted or notice_persists:
-                code, label = _resolve_alarm(state.status)
-                state.status["ha_alarm_active"] = True
-                state.status["ha_alarm_code"] = code
-                state.status["ha_alarm_label"] = label
+                self._raise_alarm(state)
             else:
                 state.status["ha_alarm_active"] = False
                 state.status["ha_alarm_code"] = None
                 state.status["ha_alarm_label"] = None
+                state.status["ha_alarm_description"] = None
                 state.status["ha_notice_errcode"] = None
                 state.status["ha_notice_at"] = None
             return True
@@ -568,15 +619,17 @@ class NeomowCoordinator:
                 # Stale/duplicate (createTime is China-time "Y-m-d H:M:S", so a
                 # lexicographic compare is chronological) - ignore.
                 return True
+            state.last_notice_at = ct
+            if str(err) in _NON_FAULT_CODES:
+                # A status/account notice ("Charging", "Mowing resumed",
+                # "Mower goes online", ...) - not a fault, so it must neither
+                # raise the alarm nor relabel a later halt.
+                return True
             # A genuinely new fault. Remember it (+ when); the STATUS handler
             # owns clearing it once the mower recovers (docking alarms persist).
-            state.last_notice_at = ct
             state.status["ha_notice_errcode"] = str(err)
             state.status["ha_notice_at"] = ct
-            code, label = _resolve_alarm(state.status)
-            state.status["ha_alarm_active"] = True
-            state.status["ha_alarm_code"] = code
-            state.status["ha_alarm_label"] = label
+            self._raise_alarm(state)
             return True
 
         # NOTE on duplicate suppression below: the cloud RE-BROADCASTS the
